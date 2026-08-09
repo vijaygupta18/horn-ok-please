@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0e9488">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Horn OK Please — Indian Truck Driver Simulator</title>
+<meta name="description" content="Drive a hand-painted North Indian lorry down NH-44 with the dhaba radio on shuffle.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Noto+Sans+Devanagari:wght@600;800&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+
+<canvas id="scene"></canvas>
+
+<!-- hidden YouTube player -->
+<div id="yt-wrap"><div id="yt-player"></div></div>
+
+<!-- ══ START SCREEN ══════════════════════════════════════════════════════ -->
+<div id="start" class="screen">
+  <div class="start-card">
+    <div class="marquee-top">॥ श्री गणेशाय नमः ॥</div>
+    <h1>HORN <span class="lotus-o">OK</span> PLEASE</h1>
+    <p class="sub">भारतीय ट्रक ड्राइवर सिमुलेटर</p>
+    <p class="tag">Indian Truck Driver Simulator</p>
+
+    <div class="start-blurb" id="start-blurb">
+      धीरे चलोगे तो बार-बार मिलोगे,<br>तेज़ चलोगे तो हरिद्वार मिलोगे
+    </div>
+
+    <button id="btn-start">
+      <span class="key">▶</span> START ENGINE
+    </button>
+
+    <div class="start-keys">
+      <div><b>↑</b> / <b>W</b> accelerate</div>
+      <div><b>↓</b> / <b>S</b> / <b>Space</b> brake</div>
+      <div><b>←</b> <b>→</b> / <b>A</b> <b>D</b> steer</div>
+      <div><b>X</b> handbrake / stop</div>
+      <div><b>H</b> horn (random!) · <b>G</b> full tune</div>
+      <div><b>P</b> autopilot</div>
+      <div><b>N</b> next · <b>J</b> <b>L</b> seek</div>
+      <div><b>C</b> camera · <b>M</b> mute</div>
+    </div>
+    <div class="marquee-bot">बुरी नज़र वाले तेरा मुँह काला</div>
+  </div>
+</div>
+
+<!-- ══ HUD ═══════════════════════════════════════════════════════════════ -->
+<div id="hud" class="hidden">
+
+  <!-- top-left: trip -->
+  <div class="panel trip">
+    <div class="row"><span class="lbl">NH-44</span><span id="t-clock" class="clock">06:00</span></div>
+    <div class="odo"><span id="t-km">0</span><small>km</small></div>
+    <div class="fuel-wrap">
+      <div class="fuel-lbl">डीज़ल · DIESEL</div>
+      <div class="fuel-bar"><i id="t-fuel"></i></div>
+    </div>
+    <div class="m-speed"><b id="t-mspeed">0</b><span>km/h</span><i id="t-mmood"></i></div>
+    <div id="t-dhaba" class="dhaba-hint"></div>
+  </div>
+
+  <!-- top-right: presence + mode -->
+  <div class="panel-stack">
+    <div class="panel live" title="Live tabs on this device sit on top of an ambient baseline of 13.">
+      <span class="dot"></span>
+      <b id="t-live">13</b>
+      <span class="live-lbl">drivers on the highway</span>
+    </div>
+    <button id="btn-auto" class="mode-btn">
+      <span class="mode-dot"></span><span id="t-mode">MANUAL</span>
+      <small>P</small>
+    </button>
+    <button id="btn-stop" class="mode-btn stop-btn">
+      <span class="mode-dot"></span><span id="t-stop">HANDBRAKE</span>
+      <small>X</small>
+    </button>
+    <button id="btn-time" class="mode-btn time-btn" title="Cycle: India time → Day → Night → Fast cycle">
+      <span id="t-timeicon">🕐</span><span id="t-timemode">INDIA TIME</span>
+      <small>T</small>
+    </button>
+  </div>
+
+  <!-- bottom-left: speedometer -->
+  <div class="speedo">
+    <canvas id="speedo-c" width="260" height="260"></canvas>
+    <div class="gear" id="t-gear">N</div>
+  </div>
+
+  <!-- bottom-right: radio -->
+  <div class="panel radio">
+    <div class="radio-head">
+      <span class="radio-title">ढाबा रेडियो</span>
+      <span class="shuffle-badge" title="Shuffle is permanently on">⤫ SHUFFLE</span>
+    </div>
+    <div class="now">
+      <div class="eq" id="t-eq"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="now-text"><div id="t-song" class="marq">Tuning the radio…</div></div>
+    </div>
+
+    <!-- seek bar -->
+    <div class="seek">
+      <span id="t-cur" class="tm">0:00</span>
+      <div id="seek-bar" class="seek-bar" title="Click or drag to seek">
+        <i id="seek-fill"></i><b id="seek-knob"></b>
+      </div>
+      <span id="t-dur" class="tm">0:00</span>
+    </div>
+
+    <div class="radio-ctl">
+      <button id="btn-prev" title="Previous track (B)">⏮</button>
+      <button id="btn-rw" title="Back 10s (←← J)">⏪</button>
+      <button id="btn-play" class="big" title="Play / Pause (K)">⏸</button>
+      <button id="btn-ff" title="Forward 10s (L)">⏩</button>
+      <button id="btn-next" title="Next track (N)">⏭</button>
+      <input id="vol" type="range" min="0" max="100" value="65" title="Volume">
+      <button id="btn-mute" title="Mute all (M)">🔊</button>
+    </div>
+    <div class="radio-foot"><span id="t-track"></span> · Driver ki Playlist 🚛</div>
+  </div>
+
+  <!-- horn name flash -->
+  <div id="t-horn" class="horn-name"></div>
+
+  <!-- centre toast -->
+  <div id="toast"></div>
+
+  <!-- dhaba break banner -->
+  <div id="break" class="hidden"></div>
+
+  <!-- touch controls -->
+  <div class="touch">
+    <button id="tc-left" class="tbtn">◀</button>
+    <button id="tc-right" class="tbtn">▶</button>
+    <button id="tc-horn" class="tbtn horn">📯</button>
+    <button id="tc-brake" class="tbtn brake">BRAKE</button>
+    <button id="tc-gas" class="tbtn gas">GAS</button>
+    <button id="tc-cam" class="tbtn small">📷</button>
+  </div>
+
+  <div class="hint" id="t-hint">↑ accelerate · ↓ / Space brake (hold to reverse) · ← → steer · X stop · H horn · G horn type · T time · P autopilot · C camera</div>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
