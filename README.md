@@ -53,7 +53,7 @@ user gesture.
 | `↓` `S` `Space` | brake — works **during autopilot too**. Keep holding at a standstill and it slots into **reverse** |
 | `←` `→` `A` `D` | steer |
 | `X` | handbrake |
-| `H` | **horn — a different one every press** |
+| `H` | **horn — plays the whole tune; each new press picks a different one** |
 | `G` | full-length horn, named on screen |
 | `P` | autopilot (on by default) |
 | `T` | time: India time → Day → Night → Fast cycle |
@@ -90,8 +90,9 @@ highway with the headlamps on and 2,600 stars overhead, Milky Way included.
 </td><td width="50%" valign="top">
 
 ### 📯 Six real horns
-Musical tune horns, *Kangana Tera Ni*, *Magic In The Air*, *Baby Shark* — picked at
-random on every press, never the same one twice running.
+Musical tune horns, *Kangana Tera Ni*, *Magic In The Air*, *Baby Shark* — 5–15 seconds
+each and played **all the way through**. Every new press picks a different one; holding
+the key does not cycle them.
 
 ### 🚚 The cab
 See-through windscreen, pom-pom fringe, a **live wing mirror** rendering the road behind

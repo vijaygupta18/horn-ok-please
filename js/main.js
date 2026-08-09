@@ -240,6 +240,8 @@ const sfx = new Sfx();
 const radio = new Radio(renderNowPlaying);
 let muted = false;
 
+let hornLabelT = 0;
+
 const presence = new Presence((count, delta, live) => {
   const el = $('#t-live');
   el.textContent = count;
@@ -260,11 +262,21 @@ const presence = new Presence((count, delta, live) => {
 
 function doHorn(long = false) {
   if (S.hornCooldown > 0) return;
-  S.hornCooldown = long ? 1.9 : 0.5;
-  // A different horn every single press — that's half the fun of these trucks.
+  // A different horn every single press, played all the way through. The
+  // cooldown is the tune's own length, so holding H waits for it to finish
+  // rather than stuttering over itself.
   const h = sfx.randomHorn(long);
-  if (h) { UI.horn.textContent = `📯 ${h.hi}`; UI.horn.classList.add('lit'); setTimeout(() => UI.horn.classList.remove('lit'), 900); }
-  radio.duck(long ? 2200 : 900);
+  const dur = (h && h.duration) || 1.6;
+  // Short debounce only — a deliberate new press should be able to cut the
+  // current tune off and start a different one straight away.
+  S.hornCooldown = 0.15;
+  if (h) {
+    UI.horn.textContent = `📯 ${h.hi}`;
+    UI.horn.classList.add('lit');
+    clearTimeout(hornLabelT);
+    hornLabelT = setTimeout(() => UI.horn.classList.remove('lit'), dur * 1000);
+  }
+  radio.duck(dur * 1000 + 300);
   // scatter the cow if it's close enough to hear you
   if (cowState.active && cowState.d - S.dist < 60) {
     cowState.active = false;
@@ -741,8 +753,9 @@ function frame(now) {
   if (S.fuel <= 0) throttleIn = 0;
   // Handbrake overrides everything, in autopilot too.
   if (S.handbrake) { throttleIn = 0; brakeIn = 1; }
-  // Holding H gives the long pressure-horn blast.
-  if (keys.h && S.hornCooldown === 0) doHorn(true);
+  // NB: no auto-retrigger while H is held. One press = one complete horn;
+  // the next PRESS picks a new one. Holding used to restart a fresh tune every
+  // time the cooldown lapsed, which sounded like the horn was channel-hopping.
 
   S.throttle = lerp(S.throttle, throttleIn, dt * 4);
   const wasBraking = S.braking;

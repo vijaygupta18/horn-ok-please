@@ -230,12 +230,17 @@ export class Sfx {
     return this.hornBuffers.filter(Boolean).length;
   }
 
-  /** Play a decoded horn sample; returns false if that slot isn't available. */
-  _playHornSample(i, long) {
+  /**
+   * Play a decoded horn sample in full.
+   * One press plays the WHOLE horn — these are tunes, and cutting them off after
+   * a second turns "Kangana Tera Ni" into a beep. Returns its length in seconds,
+   * or 0 if that slot isn't loaded.
+   */
+  _playHornSample(i) {
     const buf = this.hornBuffers[i];
-    if (!buf) return false;
+    if (!buf) return 0;
     const ctx = this._ensure();
-    // Cut off whatever is already sounding so presses don't pile up.
+    // A new press interrupts the one still sounding, so presses don't stack.
     try { this._hornNode?.stop(); } catch { /* already ended */ }
 
     const src = ctx.createBufferSource();
@@ -243,21 +248,17 @@ export class Sfx {
     const g = ctx.createGain();
     g.gain.value = 0.85;
     src.connect(g).connect(this.master);
-    // A tap gives a short blast; holding H lets the whole tune play out.
-    const dur = long ? buf.duration : Math.min(buf.duration, 1.1);
-    const end = ctx.currentTime + dur;
-    if (!long && buf.duration > 1.1) {
-      g.gain.setValueAtTime(0.85, end - 0.14);
-      g.gain.exponentialRampToValueAtTime(0.001, end);
-    }
     src.start();
-    src.stop(end + 0.02);
     this._hornNode = src;
     this.lastHorn = i;
-    return true;
+    return buf.duration;
   }
 
-  /** A different horn every time — never the same one twice in a row. */
+  /**
+   * A different horn every time — never the same one twice in a row — and always
+   * played through to the end. Returns the horn's info plus its `duration`, so
+   * the caller can hold off retriggering until the tune has finished.
+   */
   randomHorn(long = false) {
     if (!this.enabled) return null;
     const available = this.hornBuffers.map((b, i) => (b ? i : -1)).filter((i) => i >= 0);
@@ -270,15 +271,16 @@ export class Sfx {
         t = types[(types.indexOf(t) + 1) % types.length];
       }
       this.lastSynth = t;
-      this.horn(long, t);
-      return Sfx.HORNS.find((h) => h.id === t) || null;
+      this.horn(true, t);                       // full phrase, not a stub
+      const info = Sfx.HORNS.find((h) => h.id === t);
+      return info ? { ...info, duration: t === 'tune' ? 2.1 : 1.7 } : null;
     }
     let i = available[(Math.random() * available.length) | 0];
     if (available.length > 1 && i === this.lastHorn) {
       i = available[(available.indexOf(i) + 1) % available.length];
     }
-    this._playHornSample(i, long);
-    return HORN_FILES[i];
+    const duration = this._playHornSample(i);
+    return { ...HORN_FILES[i], duration };
   }
 
   _ensure() {
