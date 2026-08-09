@@ -292,6 +292,34 @@ function buildCabInterior(cabW, cabH, cabL, noseZ, deckY) {
   charm.position.set(-0.40, glassTop - 0.015, glassZ - 0.03);
   g.add(charm);
 
+  // A bottle stowed on the dash shelf — capped and upright, wedged against the
+  // windscreen the way everything in a lorry cab ends up.
+  const bottle = new THREE.Group();
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: '#4a2a12', roughness: 0.12, metalness: 0.0,
+    transparent: true, opacity: 0.82, envMapIntensity: 1.4,
+  });
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.036, 0.17, 14), glassMat);
+  barrel.position.y = 0.085;
+  bottle.add(barrel);
+  const shoulder = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.036, 0.055, 14), glassMat);
+  shoulder.position.y = 0.198;
+  bottle.add(shoulder);
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.05, 12), glassMat);
+  neck.position.y = 0.25;
+  bottle.add(neck);
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.018, 12),
+    mat('#d4a017', { metalness: 0.85, roughness: 0.3 }));
+  cap.position.y = 0.283;
+  bottle.add(cap);
+  const label = new THREE.Mesh(new THREE.CylinderGeometry(0.0375, 0.0375, 0.075, 14),
+    mat('#e8e2d0', { roughness: 0.85 }));
+  label.position.y = 0.085;
+  bottle.add(label);
+  bottle.position.set(-0.66, deckY + 0.87, glassZ - 0.30);
+  bottle.rotation.z = 0.06;
+  g.add(bottle);
+
   // rear-view mirror with a marigold garland looped over it
   // Rear-view mirror. The glass is a live render of the road behind (see
   // main.js), so it shows what's actually back there — headlights closing on

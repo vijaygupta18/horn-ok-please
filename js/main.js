@@ -209,7 +209,8 @@ addEventListener('keydown', (e) => {
   if (k === 'j') { radio.skip(-10); toast('१० सेकंड पीछे', '−10s', true); }
   if (k === 'l') { radio.skip(10); toast('१० सेकंड आगे', '+10s', true); }
   if (k === 'k') radio.toggle();
-  if (k === 'c') { S.cam = (S.cam + 1) % CAMS.length; toast('कैमरा', CAMS[S.cam].name, true); }
+  if (k === 'c') { S.cam = (S.cam + 1) % CAMS.length; syncOrbitToCam();
+    toast('कैमरा', CAMS[S.cam].name + (CAMS[S.cam].orbit ? ' — drag to look around' : ''), true); }
   if (k === 'm') toggleMute();
 });
 addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
@@ -340,9 +341,14 @@ const CAMS = [
   // Eye sits mid-glass (the window spans y≈2.17–2.79), not level with its top,
   // or the hanging fringe ends up across the middle of the road view.
   { name: 'CABIN',     pos: new THREE.Vector3(0.5, 2.52, 3.52), look: new THREE.Vector3(0.34, 2.30, 34), fov: 70, inside: true },
-  { name: 'BONNET',    pos: new THREE.Vector3(0, 3.15, 5.0),   look: new THREE.Vector3(0, 2.7, 34), fov: 66 },
-  { name: 'CINEMATIC', pos: new THREE.Vector3(-9.5, 2.3, -6),  look: new THREE.Vector3(0, 2.2, 8),  fov: 46 },
-  { name: 'TOP',       pos: new THREE.Vector3(0, 15, -19),     look: new THREE.Vector3(0, 0, 22),  fov: 52, orbit: true },
+  // Bonnet cam sits ON the front edge looking down the road, not floating ahead
+  // of the truck where the nose can clip through it.
+  { name: 'BONNET',    pos: new THREE.Vector3(0, 3.02, 4.34),  look: new THREE.Vector3(0, 2.15, 40), fov: 68 },
+  // Both of these are mouse-orbitable; each keeps its own framing.
+  { name: 'CINEMATIC', pos: new THREE.Vector3(-9.5, 2.3, -6),  look: new THREE.Vector3(0, 2.2, 8),  fov: 46,
+    orbit: true, orbitRadius: 13, orbitPitch: 0.20, orbitYaw: -1.15, aimY: 2.2 },
+  { name: 'TOP',       pos: new THREE.Vector3(0, 15, -19),     look: new THREE.Vector3(0, 0, 22),  fov: 52,
+    orbit: true, orbitRadius: 26, orbitPitch: 0.72, orbitYaw: 0, aimY: 2 },
 ];
 const camPos = new THREE.Vector3(0, 6, -14);
 const camLook = new THREE.Vector3();
@@ -351,8 +357,18 @@ const tmpV = new THREE.Vector3();
 // ── mouse orbit (TOP view) ────────────────────────────────────────────────
 // Drag to swing the camera around the truck, wheel to pull in and out.
 
-const orbit = { yaw: 0, pitch: 0.72, zoom: 1, dragging: false, px: 0, py: 0 };
+const orbit = { yaw: 0, pitch: 0.72, zoom: 1, dragging: false, px: 0, py: 0, forCam: -1 };
 const orbitCam = () => CAMS[S.cam].orbit;
+
+/** Load this camera's own orbit framing the first time we switch to it. */
+function syncOrbitToCam() {
+  const c = CAMS[S.cam];
+  if (!c.orbit || orbit.forCam === S.cam) return;
+  orbit.forCam = S.cam;
+  orbit.yaw = c.orbitYaw ?? 0;
+  orbit.pitch = c.orbitPitch ?? 0.6;
+  orbit.zoom = 1;
+}
 
 canvas.addEventListener('pointerdown', (e) => {
   if (!orbitCam()) return;
@@ -771,7 +787,10 @@ function frame(now) {
     let a = S.throttle * 4.6 - grade * 8.5;
     a -= 0.45 + 0.0022 * S.speed * S.speed;                      // rolling + drag
     if (brakeIn) a -= 9.5;
-    if (Math.abs(S.lane) > LANE_LIMIT) a -= 4.2;                 // off the tarmac
+    // Off the tarmac. Kept well below full throttle (4.6) — at 4.2 the two very
+    // nearly cancelled and a truck that wandered onto the verge could never
+    // climb back out, autopilot included.
+    if (Math.abs(S.lane) > LANE_LIMIT) a -= 2.5;
     S.speed = clamp(S.speed + a * dt, 0, MAX_SPEED);
   }
 
@@ -888,8 +907,9 @@ function frame(now) {
   // ---- camera ----------------------------------------------------------
   const CAM = CAMS[S.cam];
   if (CAM.orbit) {
+    syncOrbitToCam();
     // spherical offset around the truck, driven by the mouse
-    const r = 26 * orbit.zoom;
+    const r = (CAM.orbitRadius ?? 26) * orbit.zoom;
     tmpV.set(
       Math.cos(orbit.pitch) * Math.sin(orbit.yaw) * r,
       Math.sin(orbit.pitch) * r,
@@ -906,7 +926,7 @@ function frame(now) {
   camera.position.copy(camPos);
   camera.position.x += Math.sin(S.t * 31) * shake;
   camera.position.y += Math.cos(S.t * 27) * shake * 0.8;
-  if (CAM.orbit) camera.lookAt(truck.position.x, truck.position.y + 2, truck.position.z);
+  if (CAM.orbit) camera.lookAt(truck.position.x, truck.position.y + (CAM.aimY ?? 2), truck.position.z);
   else {
     truck.localToWorld(camLook.copy(CAM.look));
     camera.lookAt(camLook);
@@ -1049,7 +1069,9 @@ function autopilot(dt) {
   const err = target - S.speed;
   const throttle = clamp(err * 0.4, 0, 1);
   const brake = err < -2.2 ? 1 : 0;
-  const steer = clamp((autoTargetLane - S.lane) * 0.55, -1, 1);
+  // Steer harder when we're off the road, so recovery is decisive.
+  const offRoad = Math.abs(S.lane) > LANE_LIMIT;
+  const steer = clamp((autoTargetLane - S.lane) * (offRoad ? 1.1 : 0.55), -1, 1);
   return [throttle, steer, brake];
 }
 

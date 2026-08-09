@@ -62,7 +62,8 @@ user gesture.
 | `J` `L` | seek ∓10s · `0`–`9` jump to % · `K` play/pause |
 | `M` | mute |
 
-**Top view** is mouse-orbitable — drag to swing round the truck, scroll to zoom.
+**Top and cinematic views are mouse-orbitable** — drag to swing round the truck,
+scroll to zoom. Each keeps its own framing.
 On phones, on-screen controls appear automatically.
 
 ---
@@ -177,6 +178,8 @@ Every one of these was found by looking at rendered output, not by reading code:
 | Traffic vanished after 300 m | `v.d` incremented as a *relative* offset but read as a *world* distance |
 | Every mobile control lost its position | `env(safe-area-inset-*)` with no fallback invalidates the whole `calc()` |
 | Steering inverted | +X is screen-**left** when the camera looks down +Z, so "left" must produce a *positive* steer |
+| Truck could get stuck on the verge forever | Off-road drag (4.2 m/s²) almost exactly cancelled full throttle (4.6) |
+| Horn repeated itself | `randomHorn` fell through to a single default synth type before the mp3s decoded |
 
 ---
 
