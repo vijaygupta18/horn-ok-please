@@ -1055,6 +1055,24 @@ function autopilot(dt) {
 
 // ── boot ───────────────────────────────────────────────────────────────────
 
+// Decode the horn samples at the first gesture of any kind. An AudioContext
+// can't exist before one, and waiting only for the START button means ?nointro
+// and touch users would get the synthesized fallback forever.
+{
+  let armed = false;
+  const arm = () => {
+    if (armed) return;
+    armed = true;
+    sfx.loadHorns().then((n) => console.info(`[truck-sim] ${n} horn samples ready`));
+    for (const ev of ['pointerdown', 'keydown', 'touchstart']) {
+      removeEventListener(ev, arm, true);
+    }
+  };
+  for (const ev of ['pointerdown', 'keydown', 'touchstart']) {
+    addEventListener(ev, arm, true);
+  }
+}
+
 // Pay all first-bind texture uploads now, not mid-drive.
 {
   const n = warmTruckTextures(renderer) + world.warmTextures();

@@ -261,7 +261,18 @@ export class Sfx {
   randomHorn(long = false) {
     if (!this.enabled) return null;
     const available = this.hornBuffers.map((b, i) => (b ? i : -1)).filter((i) => i >= 0);
-    if (!available.length) { this.horn(long); return null; }
+    if (!available.length) {
+      // Samples not decoded (yet, or at all) — still vary the synth horn, or
+      // every press sounds identical and the whole point is lost.
+      const types = Sfx.HORNS.map((h) => h.id);
+      let t = types[(Math.random() * types.length) | 0];
+      if (t === this.lastSynth && types.length > 1) {
+        t = types[(types.indexOf(t) + 1) % types.length];
+      }
+      this.lastSynth = t;
+      this.horn(long, t);
+      return Sfx.HORNS.find((h) => h.id === t) || null;
+    }
     let i = available[(Math.random() * available.length) | 0];
     if (available.length > 1 && i === this.lastHorn) {
       i = available[(available.indexOf(i) + 1) % available.length];
