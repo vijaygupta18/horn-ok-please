@@ -38,6 +38,15 @@
       धीरे चलोगे तो बार-बार मिलोगे,<br>तेज़ चलोगे तो हरिद्वार मिलोगे
     </div>
 
+    <div class="name-row">
+      <label for="driver-name">तुम्हारा नाम · Driver name</label>
+      <div class="name-field">
+        <input id="driver-name" type="text" maxlength="18" placeholder="e.g. Pappu Transport" autocomplete="off" spellcheck="false">
+        <button id="btn-dice" type="button" title="Pick one for me">🎲</button>
+      </div>
+      <small>painted on your lorry &amp; shown to other drivers</small>
+    </div>
+
     <button id="btn-start">
       <span class="key">▶</span> START ENGINE
     </button>
@@ -48,7 +57,7 @@
       <div><b>←</b> <b>→</b> / <b>A</b> <b>D</b> steer</div>
       <div><b>X</b> handbrake / stop</div>
       <div><b>H</b> horn (random!) · <b>G</b> full tune</div>
-      <div><b>P</b> autopilot</div>
+      <div><b>P</b> autopilot · <b>U</b> upload billboard</div>
       <div><b>N</b> next · <b>J</b> <b>L</b> seek</div>
       <div><b>C</b> camera · <b>M</b> mute</div>
     </div>
@@ -133,6 +142,14 @@
   <!-- horn name flash -->
   <div id="t-horn" class="horn-name"></div>
 
+  <!-- billboard "park to upload" hint -->
+  <div id="bb-hint"></div>
+
+  <!-- round universe minimap -->
+  <div class="minimap" title="The round universe — every driver online right now">
+    <canvas id="minimap-c" width="168" height="168"></canvas>
+  </div>
+
   <!-- centre toast -->
   <div id="toast"></div>
 
@@ -149,7 +166,27 @@
     <button id="tc-cam" class="tbtn small">📷</button>
   </div>
 
-  <div class="hint" id="t-hint">↑ accelerate · ↓ / Space brake (hold to reverse) · ← → steer · X stop · H horn · G horn type · T time · P autopilot · C camera</div>
+  <div class="hint" id="t-hint">↑ accelerate · ↓ / Space brake (hold to reverse) · ← → steer · X stop · H horn · U upload billboard · T time · P autopilot · C camera</div>
+</div>
+
+<!-- ══ BILLBOARD UPLOAD MENU ═════════════════════════════════════════════════ -->
+<div id="bb-modal" class="modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <span class="modal-kicker">📷 HOARDING · होर्डिंग</span>
+      <h2 id="bb-title">Put your photo on the highway</h2>
+    </div>
+    <canvas id="bb-preview" width="360" height="177"></canvas>
+    <label id="bb-drop" for="bb-file">
+      <span>📁 Choose a photo</span>
+      <small>it gets pasted on this billboard for every driver online</small>
+    </label>
+    <input id="bb-file" type="file" accept="image/*" hidden>
+    <div class="modal-btns">
+      <button id="bb-cancel" class="mbtn ghost">Cancel</button>
+      <button id="bb-paste" class="mbtn go" disabled>PASTE ON BILLBOARD</button>
+    </div>
+  </div>
 </div>
 
 <script type="module" src="js/main.js"></script>

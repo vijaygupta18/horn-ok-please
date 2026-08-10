@@ -1,72 +1,92 @@
-// presence.js — "drivers on the highway" counter.
+// presence.js — live multiplayer: broadcast my truck's state, receive everyone
+// else's. Two modes, chosen automatically:
 //
-// Two modes, chosen automatically:
+//   LIVE  — /api/presence answers, so the roster is the real set of people on
+//           the site right now, wherever they are (see api/presence.js). This is
+//           what you get on Vercel.
+//   LOCAL — no API (e.g. `python3 -m http.server`). Falls back to a cross-tab
+//           roster on THIS machine via localStorage heartbeats, so opening a
+//           second tab still gives you a second driver to meet.
 //
-//   LIVE  — /api/presence answers, so the number is the real count of people on
-//           the site right now (see api/presence.js). This is what you get on
-//           Vercel.
-//   LOCAL — no API (e.g. `python3 -m http.server`). Falls back to counting the
-//           browser tabs open on THIS machine via localStorage heartbeats, plus
-//           a gentle ambient drift so the number isn't frozen.
-//
-// Either way the displayed number never drops below FLOOR.
+// Either way `onRoster` fires with the list of OTHER drivers, and the displayed
+// count never drops below FLOOR (the ambient "drivers on the highway" vibe).
 
 const FLOOR = 13;
-const KEY = 'its_presence_v1';
-const HEARTBEAT_MS = 3000;
-const LIVE_POLL_MS = 8000;
-const STALE_MS = 10000;
+const KEY = 'its_roster_v1';
+const HEARTBEAT_MS = 2500;
+const STALE_MS = 9000;
 
 export class Presence {
-  constructor(onUpdate) {
-    this.onUpdate = onUpdate || (() => {});
+  /**
+   * @param {object} o
+   * @param {() => {name:string,color:string}} o.identity   who I am right now
+   * @param {() => {dist:number,lane:number,kmh:number}} o.state   where I am
+   * @param {(count:number, delta:number, live:boolean) => void} o.onUpdate
+   * @param {(players:Array) => void} o.onRoster   the OTHER drivers
+   */
+  constructor(o) {
+    this.identity = o.identity || (() => ({ name: 'Driver', color: '#f0a020' }));
+    this.state = o.state || (() => ({ dist: 0, lane: 0, kmh: 0 }));
+    this.onUpdate = o.onUpdate || (() => {});
+    this.onRoster = o.onRoster || (() => {});
+
     this.id = Math.random().toString(36).slice(2) + Date.now().toString(36);
-    this.sim = 0;
     this.count = FLOOR;
     this.lastCount = FLOOR;
-    this.live = false;          // flips true once the API answers
-    this.liveCount = 0;
+    this.live = false;
 
     this._beat();
-    this._tickSim();
-    this._pollLive();
-
     this._hb = setInterval(() => this._beat(), HEARTBEAT_MS);
-    this._sim = setInterval(() => this._tickSim(), 1000);
-    this._lp = setInterval(() => this._pollLive(), LIVE_POLL_MS);
 
-    addEventListener('storage', (e) => { if (e.key === KEY) this._recount(); });
+    addEventListener('storage', (e) => { if (e.key === KEY) this._recountLocal(); });
     addEventListener('beforeunload', () => this._leave());
-    // `pagehide` is the one that actually fires on mobile Safari
-    addEventListener('pagehide', () => this._leave());
+    addEventListener('pagehide', () => this._leave());   // the one that fires on mobile Safari
 
     if ('BroadcastChannel' in window) {
       this.bc = new BroadcastChannel('its_presence');
-      this.bc.onmessage = () => this._recount();
+      this.bc.onmessage = () => this._recountLocal();
     }
   }
 
-  // ── live server count ─────────────────────────────────────────────────────
+  _mine() {
+    const idy = this.identity() || {};
+    const st = this.state() || {};
+    return {
+      name: (idy.name || 'Driver').slice(0, 20),
+      color: idy.color || '#f0a020',
+      dist: +st.dist || 0,
+      lane: +st.lane || 0,
+      kmh: +st.kmh || 0,
+    };
+  }
 
-  async _pollLive() {
+  async _beat() {
+    // Try the server first; fall back to the cross-tab roster if it's not there.
+    const mine = this._mine();
     try {
-      const r = await fetch(`/api/presence?id=${encodeURIComponent(this.id)}`, {
+      const r = await fetch('/api/presence', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
         cache: 'no-store',
+        body: JSON.stringify({ id: this.id, ...mine }),
       });
       if (!r.ok) throw new Error(r.status);
       const data = await r.json();
-      if (typeof data.count === 'number') {
+      if (Array.isArray(data.players)) {
         this.live = true;
-        this.liveCount = data.count;
-        this.source = data.source;
-        this._recount();
+        const others = data.players.filter((p) => p.id !== this.id);
+        this.onRoster(others);
+        this._setCount(typeof data.count === 'number' ? data.count : others.length + 1);
+        return;
       }
+      throw new Error('no players');
     } catch {
-      this.live = false;        // stay on the local estimate
+      this.live = false;
+      this._beatLocal(mine);
     }
   }
 
-  // ── local (per-machine) fallback ──────────────────────────────────────────
+  // ── cross-tab local roster ────────────────────────────────────────────────
 
   _read() {
     try { return JSON.parse(localStorage.getItem(KEY) || '{}'); }
@@ -77,49 +97,44 @@ export class Presence {
     try { localStorage.setItem(KEY, JSON.stringify(map)); } catch { /* private mode */ }
   }
 
-  _beat() {
+  _beatLocal(mine) {
     const now = Date.now();
     const map = this._read();
-    map[this.id] = now;
-    for (const k of Object.keys(map)) if (now - map[k] > STALE_MS) delete map[k];
+    map[this.id] = { ...mine, ts: now };
+    for (const k of Object.keys(map)) if (now - (map[k].ts || 0) > STALE_MS) delete map[k];
     this._write(map);
     this.bc?.postMessage('beat');
-    this._recount(map);
+    this._recountLocal(map);
+  }
+
+  _recountLocal(map) {
+    if (this.live) return;                 // server took over between ticks
+    const now = Date.now();
+    map = map || this._read();
+    const others = [];
+    for (const [k, v] of Object.entries(map)) {
+      if (k === this.id || now - (v.ts || 0) > STALE_MS) continue;
+      others.push({ id: k, name: v.name, color: v.color, dist: v.dist, lane: v.lane, kmh: v.kmh });
+    }
+    this.onRoster(others);
+    this._setCount(others.length + 1);
   }
 
   _leave() {
+    // tell the server I'm gone so my dot drops immediately
+    try {
+      const blob = new Blob([JSON.stringify({ id: this.id, leave: true })], { type: 'application/json' });
+      navigator.sendBeacon?.('/api/presence', blob);
+    } catch { /* nothing to do on unload */ }
+    // and clear my local entry
     const map = this._read();
     delete map[this.id];
     this._write(map);
     this.bc?.postMessage('leave');
-    // best-effort "I'm gone" so the server count drops immediately
-    try {
-      navigator.sendBeacon?.(`/api/presence?id=${encodeURIComponent(this.id)}&leave=1`);
-    } catch { /* nothing to do on unload */ }
   }
 
-  _tabs(map) {
-    const now = Date.now();
-    map = map || this._read();
-    return Object.values(map).filter((ts) => now - ts <= STALE_MS).length || 1;
-  }
-
-  // Ambient drift, used only when there's no live count to show.
-  _tickSim() {
-    if (this.live) return;
-    if (Math.random() < 0.13) {
-      this.sim += Math.random() < 0.55 ? 1 : -1;
-      this.sim = Math.max(0, Math.min(37, this.sim));
-    }
-    this._recount();
-  }
-
-  _recount(map) {
-    const next = this.live
-      ? Math.max(FLOOR, this.liveCount)
-      // FLOOR - 1 + tabs → a lone visitor sees exactly 13, each join adds one
-      : Math.max(FLOOR, FLOOR - 1 + this._tabs(map) + this.sim);
-
+  _setCount(real) {
+    const next = Math.max(FLOOR, real);
     if (next !== this.count) {
       this.lastCount = this.count;
       this.count = next;
@@ -129,8 +144,6 @@ export class Presence {
 
   destroy() {
     clearInterval(this._hb);
-    clearInterval(this._sim);
-    clearInterval(this._lp);
     this._leave();
   }
 }

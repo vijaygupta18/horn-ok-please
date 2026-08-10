@@ -9,6 +9,8 @@ import { buildTruck, updateTruck, setBrakeLights, warmTruckTextures } from './tr
 import { World, ROAD_W, LANE, roadCenterX, roadY, roadHeading, makeCow, TIME_MODES } from './world.js';
 import { Radio, Sfx } from './audio.js';
 import { Presence } from './presence.js';
+import { Multiplayer, randomDriverName, randomDriverColor } from './multiplayer.js';
+import { Billboards } from './billboards.js';
 
 const $ = (s) => document.querySelector(s);
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -200,6 +202,8 @@ addEventListener('keydown', (e) => {
     if (dur > 0) { radio.seek(dur * (+k / 10)); toast(`${+k * 10}% पर`, `Jumped to ${+k * 10}%`, true); }
   }
   if (k === 'h') doHorn(false);
+  if (k === 'u') billboards.openUpload();
+  if (k === 'escape') billboards.closeUpload();
   if (k === 'p') toggleAuto();
   if (k === 'x') toggleHandbrake();
   if (k === 't') cycleTimeMode();
@@ -234,6 +238,9 @@ bindTouch('#tc-brake', 'brake');
 $('#tc-horn').addEventListener('touchstart', (e) => { e.preventDefault(); doHorn(); }, { passive: false });
 $('#tc-horn').addEventListener('click', doHorn);
 
+// tap the "park to upload" hint (mobile / mouse) to open the billboard menu
+$('#bb-hint')?.addEventListener('click', () => billboards.openUpload());
+
 // ── audio + presence ───────────────────────────────────────────────────────
 
 const sfx = new Sfx();
@@ -242,23 +249,58 @@ let muted = false;
 
 let hornLabelT = 0;
 
-const presence = new Presence((count, delta, live) => {
-  const el = $('#t-live');
-  el.textContent = count;
-  // tell the user which number they're looking at, honestly
-  const panel = el.closest('.live');
-  if (panel) {
-    panel.title = live
-      ? 'Live: the real number of people on the site right now.'
-      : 'No server: counting browser tabs on this device, over a baseline of 13.';
-    panel.classList.toggle('is-live', !!live);
-  }
-  if (delta > 0) {
-    el.classList.remove('bump');
-    void el.offsetWidth;
-    el.classList.add('bump');
-  }
+// ── driver identity (name + colour, shown to everyone) ──────────────────────
+const DRIVER_KEY = 'its_driver_v1';
+const driver = (() => {
+  let d = {};
+  try { d = JSON.parse(localStorage.getItem(DRIVER_KEY) || '{}'); } catch { /* private mode */ }
+  if (!d.color) d.color = randomDriverColor();
+  if (!d.name) d.name = randomDriverName();
+  return d;
+})();
+function saveDriver() {
+  try { localStorage.setItem(DRIVER_KEY, JSON.stringify(driver)); } catch { /* private mode */ }
+}
+
+// ── multiplayer (other drivers on the road + the round-universe minimap) ────
+const multiplayer = new Multiplayer(scene);
+multiplayer.attachMap($('#minimap-c'));
+
+// ── shared upload billboards (credited to your truck's name) ────────────────
+const billboards = new Billboards(scene, world, () => driver.name);
+
+const presence = new Presence({
+  identity: () => ({ name: driver.name, color: driver.color }),
+  state: () => ({ dist: S.dist, lane: S.lane, kmh: Math.abs(S.speed) * KMH }),
+  onRoster: (players) => multiplayer.setRoster(players),
+  onUpdate: (count, delta, live) => {
+    const el = $('#t-live');
+    el.textContent = count;
+    const panel = el.closest('.live');
+    if (panel) {
+      panel.title = live
+        ? 'Live: the real number of drivers on the highway right now.'
+        : 'No server: counting drivers across tabs on this device, over a baseline of 13.';
+      panel.classList.toggle('is-live', !!live);
+    }
+    if (delta > 0) {
+      el.classList.remove('bump');
+      void el.offsetWidth;
+      el.classList.add('bump');
+    }
+  },
 });
+
+// prefill the start-card name field; the dice picks a fresh name + truck colour
+{
+  const nameInput = $('#driver-name');
+  if (nameInput) nameInput.value = driver.name;
+  $('#btn-dice')?.addEventListener('click', () => {
+    driver.name = randomDriverName();
+    driver.color = randomDriverColor();
+    if (nameInput) nameInput.value = driver.name;
+  });
+}
 
 function doHorn(long = false) {
   if (S.hornCooldown > 0) return;
@@ -347,7 +389,10 @@ function toast(hi, en, good = false) {
 // ── cameras ────────────────────────────────────────────────────────────────
 
 const CAMS = [
-  { name: 'CHASE',     pos: new THREE.Vector3(0, 4.6, -11.4),  look: new THREE.Vector3(0, 2.5, 18), fov: 58 },
+  // Raised and pulled back, aimed lower and further down the road, so the default
+  // view shows much more of the highway ahead — easier to drive, and to spot the
+  // upload billboards and other drivers coming up.
+  { name: 'CHASE',     pos: new THREE.Vector3(0, 6.4, -14.5),  look: new THREE.Vector3(0, 1.5, 40), fov: 62 },
   // Driver sits on the RIGHT — India drives on the left.
   // Eye point sits back from the wheel and above it, like an actual driver's.
   // Eye sits mid-glass (the window spans y≈2.17–2.79), not level with its top,
@@ -828,6 +873,10 @@ function frame(now) {
   world.update(dt, S.dist, Math.abs(S.speed), S.t, S.lane);
   const night = world.night;
 
+  // ---- other drivers + upload billboards ------------------------------
+  multiplayer.update(dt, S.dist, S.lane, driver.name, driver.color, night);
+  billboards.update(dt, S.dist, S.lane, Math.abs(S.speed) * KMH, night, S.t);
+
   // ---- place the truck on the road ------------------------------------
   const h0 = roadHeading(S.dist);
   truck.position.set(Math.cos(h0) * S.lane, 0, -Math.sin(h0) * S.lane);
@@ -1205,6 +1254,7 @@ requestAnimationFrame(frame);
 // automated checks step it without waiting on requestAnimationFrame.
 window.__sim = {
   S, BREAK, QUALITY, CAMS, orbit, world, truck, radio, sfx, presence,
+  driver, multiplayer, billboards,
   renderer, mirrorRT, mirrorCam, get mirrorFrames(){ return mirrorFrames; },
   step(n = 1, dt = 1 / 60) {
     for (let i = 0; i < n; i++) { last = performance.now() - dt * 1000; frame(performance.now()); }
@@ -1216,6 +1266,11 @@ $('#btn-start').addEventListener('click', async () => {
   const btn = $('#btn-start');
   btn.disabled = true;
   btn.innerHTML = 'STARTING…<small>engine garam ho raha hai</small>';
+
+  // lock in the driver's name — typed, or the one we picked for them
+  const typed = ($('#driver-name')?.value || '').trim().slice(0, 18);
+  driver.name = typed || driver.name || randomDriverName();
+  saveDriver();
 
   sfx.startEngine();          // both need the click gesture
   sfx.loadHorns().then((n) => console.info(`[truck-sim] ${n} horn samples ready`));
