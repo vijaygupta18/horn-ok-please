@@ -183,7 +183,9 @@ const S = {
 };
 const MAX_SPEED = 29;      // ~104 km/h
 const REVERSE_MAX = 6;     // ~21 km/h — nobody reverses a loaded lorry faster
-const LANE_LIMIT = ROAD_W / 2 - 1.35;
+// The drivable half-width. It grows as the road widens with more drivers
+// online (world.roadW), so it's recomputed each frame — see the loop.
+let LANE_LIMIT = ROAD_W / 2 - 1.35;
 
 const keys = {};
 addEventListener('keydown', (e) => {
@@ -272,7 +274,18 @@ const billboards = new Billboards(scene, world, () => driver.name);
 const presence = new Presence({
   identity: () => ({ name: driver.name, color: driver.color }),
   state: () => ({ dist: S.dist, lane: S.lane, kmh: Math.abs(S.speed) * KMH }),
-  onRoster: (players) => multiplayer.setRoster(players),
+  onRoster: (players) => {
+    multiplayer.setRoster(players);
+    // +1 lane for every 2 drivers (you + everyone else), so more people fit.
+    world.setDriverCount(players.length + 1);
+  },
+  onSpawn: (dist) => {
+    // A driver on your WiFi is already out there — drop in just behind them so
+    // you meet on the road straight away. Only ever fires once.
+    if (!(dist > 0)) return;
+    S.dist = Math.max(0, dist - 25);
+    toast('अपने नेटवर्क वाले के पास', 'Spawned near a driver on your WiFi', true);
+  },
   onUpdate: (count, delta, live) => {
     const el = $('#t-live');
     el.textContent = count;
@@ -772,6 +785,10 @@ function frame(now) {
   if (!running) return;
   S.t += dt;
 
+  // The road widens as more drivers join; keep the drivable half-width in step
+  // (world.roadW eases toward its target inside world.update each frame).
+  LANE_LIMIT = world.roadW / 2 - 1.35;
+
   // ---- input ----------------------------------------------------------
   let throttleIn, steerIn, brakeIn;
   if (S.auto) {
@@ -875,7 +892,7 @@ function frame(now) {
 
   // ---- other drivers + upload billboards ------------------------------
   multiplayer.update(dt, S.dist, S.lane, driver.name, driver.color, night);
-  billboards.update(dt, S.dist, S.lane, Math.abs(S.speed) * KMH, night, S.t);
+  billboards.update(dt, S.dist, S.lane, Math.abs(S.speed) * KMH, night, S.t, world.roadW);
 
   // ---- place the truck on the road ------------------------------------
   const h0 = roadHeading(S.dist);
