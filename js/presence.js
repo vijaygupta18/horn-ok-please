@@ -56,8 +56,9 @@ export class Presence {
     return {
       name: (idy.name || 'Driver').slice(0, 20),
       color: idy.color || '#f0a020',
-      dist: +st.dist || 0,
-      lane: +st.lane || 0,
+      x: +st.x || 0,
+      z: +st.z || 0,
+      heading: +st.heading || 0,
       kmh: +st.kmh || 0,
     };
   }
@@ -79,7 +80,7 @@ export class Presence {
         const others = data.players.filter((p) => p.id !== this.id);
         this.onRoster(others);
         this._setCount(typeof data.count === 'number' ? data.count : others.length + 1);
-        if (!this._spawned && typeof data.spawn === 'number') {
+        if (!this._spawned && data.spawn && typeof data.spawn.z === 'number') {
           this._spawned = true;
           this.onSpawn(data.spawn);
         }
@@ -120,14 +121,14 @@ export class Presence {
     const others = [];
     for (const [k, v] of Object.entries(map)) {
       if (k === this.id || now - (v.ts || 0) > STALE_MS) continue;
-      others.push({ id: k, name: v.name, color: v.color, dist: v.dist, lane: v.lane, kmh: v.kmh });
+      others.push({ id: k, name: v.name, color: v.color, x: v.x, z: v.z, heading: v.heading, kmh: v.kmh });
     }
     this.onRoster(others);
     this._setCount(others.length + 1);
     // same machine counts as the same "network" — spawn near another local tab
     if (!this._spawned && others.length) {
       this._spawned = true;
-      this.onSpawn(others[0].dist);
+      this.onSpawn({ x: others[0].x, z: others[0].z });
     }
   }
 

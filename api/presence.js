@@ -59,8 +59,9 @@ function record(id, raw, now) {
     id: str(id, 64),
     name: str(v.name, 20) || 'Driver',
     color: str(v.color, 12) || '#f0a020',
-    dist: num(v.dist),
-    lane: num(v.lane),
+    x: num(v.x),
+    z: num(v.z),
+    heading: num(v.heading),
     kmh: num(v.kmh),
     net: str(v.net, 64),          // network group (hashed IP) — never returned
     ts: v.ts || 0,
@@ -78,7 +79,7 @@ function netId(req) {
 }
 
 // The public view of a driver — network id stripped out.
-const publicOf = ({ id, name, color, dist, lane, kmh }) => ({ id, name, color, dist, lane, kmh });
+const publicOf = ({ id, name, color, x, z, heading, kmh }) => ({ id, name, color, x, z, heading, kmh });
 
 module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
@@ -95,16 +96,16 @@ module.exports = async (req, res) => {
 
   const mine = id ? JSON.stringify({
     name: str(body.name, 20), color: str(body.color, 12),
-    dist: num(body.dist), lane: num(body.lane), kmh: num(body.kmh), net, ts: now,
+    x: num(body.x), z: num(body.z), heading: num(body.heading), kmh: num(body.kmh), net, ts: now,
   }) : null;
 
-  // Spawn a newcomer near a driver already on the same WiFi. It's the nearest
-  // network-mate ahead of us on the loop (or just any mate) so we appear together.
-  function spawnFor(records, myDist) {
+  // Spawn a newcomer near a driver already on the same WiFi — the most recently
+  // active network-mate — so they appear together on the open map.
+  function spawnFor(records) {
     const mates = records.filter((r) => r.id !== id && r.net === net);
     if (!mates.length) return null;
-    mates.sort((a, b) => b.ts - a.ts);         // most recently active mate
-    return mates[0].dist;
+    mates.sort((a, b) => b.ts - a.ts);
+    return { x: mates[0].x, z: mates[0].z };
   }
 
   try {
@@ -121,7 +122,7 @@ module.exports = async (req, res) => {
       }
       for (const s of stale) kvCmd(['hdel', KEY, s]).catch(() => {});
       const players = records.map(publicOf).slice(0, MAX_PLAYERS);
-      return res.status(200).json({ count: records.length, players, spawn: spawnFor(records, num(body.dist)), source: 'kv' });
+      return res.status(200).json({ count: records.length, players, spawn: spawnFor(records), source: 'kv' });
     }
 
     // in-memory fallback
@@ -133,7 +134,7 @@ module.exports = async (req, res) => {
       if (r) records.push(r); else MEM.delete(k);
     }
     const players = records.map(publicOf).slice(0, MAX_PLAYERS);
-    return res.status(200).json({ count: records.length, players, spawn: spawnFor(records, num(body.dist)), source: 'memory' });
+    return res.status(200).json({ count: records.length, players, spawn: spawnFor(records), source: 'memory' });
   } catch (e) {
     // Never let a storage hiccup break the page — the client falls back on its own.
     return res.status(200).json({ count: null, players: [], error: String((e && e.message) || e) });

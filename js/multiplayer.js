@@ -1,26 +1,16 @@
-// multiplayer.js — draw the OTHER drivers.
+// multiplayer.js — draw the OTHER drivers on the open map.
 //
-// The presence layer (js/presence.js) hands us a roster of everyone else on the
-// highway. Here we turn that into two things you can actually see:
+// The presence layer hands us a roster of everyone else, each with a real world
+// position (x, z) and heading — because the world is now free-roam 2D, not a
+// rail. We turn that into:
 //
-//   • a coloured, named ghost lorry for each nearby player, placed on the same
-//     procedural road we're all driving — the world is a ring (UNIVERSE_LEN), so
-//     someone "ahead" of you by half the loop comes round to meet you.
-//   • a round radar in the corner where every driver is a dot on the little
-//     round universe, with their name under it.
-//
-// Ghosts are deliberately simple box lorries (not the full hero truck): cheap to
-// build, and their own colour makes them read instantly as "another player"
-// rather than NPC traffic.
+//   • a coloured, named ghost lorry for each nearby player, placed at their true
+//     spot on the plain (on or off the road), dead-reckoned between heartbeats;
+//   • a top-down radar in the corner showing every driver around you and the
+//     road, rotated so you always face up.
 
 import * as THREE from 'three';
-import { roadCenterX, roadY, roadHeading, ROAD_W, UNIVERSE_LEN } from './world.js';
-
-// nearest-image wrap of a distance delta into (-L/2, L/2]
-function wrapDelta(d) {
-  const L = UNIVERSE_LEN;
-  return ((d % L) + L * 1.5) % L - L / 2;
-}
+import { roadCenterX } from './world.js';
 
 const NAME_FIRST = ['Pappu', 'Bittu', 'Guddu', 'Sonu', 'Raju', 'Kaka', 'Balli', 'Fauji',
   'Chotu', 'Lucky', 'Goldy', 'Deepa', 'Sardar', 'Munna', 'Tinku', 'Happy'];
@@ -34,6 +24,14 @@ export const randomDriverName = () => `${rndItem(NAME_FIRST)} ${rndItem(NAME_LAS
 export const randomDriverColor = () => rndItem(COLORS);
 
 const mat = (c, o = {}) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.7, metalness: 0.05, ...o });
+
+// shortest signed angle a→b
+function angleDiff(a, b) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
 
 // A compact painted-lorry silhouette in the player's colour.
 function makeGhostTruck(color) {
@@ -61,7 +59,6 @@ function makeGhostTruck(color) {
     w.position.set(x, 0.6, z);
     g.add(w);
   }
-  // a soft colour ring on the ground so you can spot a teammate from afar
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(2.4, 3.1, 28),
     new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.4, side: THREE.DoubleSide, depthWrite: false })
@@ -73,7 +70,6 @@ function makeGhostTruck(color) {
   return g;
 }
 
-// Floating name plate that always faces the camera.
 function makeNameLabel(name, color) {
   const c = document.createElement('canvas');
   c.width = 256; c.height = 64;
@@ -96,7 +92,6 @@ function paintLabel(x, name, color) {
   x.textAlign = 'center'; x.textBaseline = 'middle';
   x.font = '700 24px Rajdhani, "Baloo 2", sans-serif';
   x.fillText(name.slice(0, 16), 128, 33);
-  // little pointer under the plate
   x.fillStyle = 'rgba(8,14,22,.72)';
   x.beginPath(); x.moveTo(118, 50); x.lineTo(138, 50); x.lineTo(128, 60); x.closePath(); x.fill();
 }
@@ -116,9 +111,9 @@ export class Multiplayer {
     this.scene = scene;
     this.root = new THREE.Group();
     scene.add(this.root);
-    this.ghosts = new Map();         // id -> { group, label, dist, lane, kmh, tDist, tLane, tKmh, name, color }
-    this.roster = [];                // last roster from presence
-    this.me = { dist: 0, lane: 0, name: 'You', color: '#fbdb4a' };
+    this.ghosts = new Map();         // id -> { group, label, x, z, heading, kmh, tX, tZ, tHeading, tKmh, name, color }
+    this.roster = [];
+    this.me = { x: 0, z: 0, heading: 0, name: 'You', color: '#fbdb4a' };
     this.mapCtx = null;
     this._mapTimer = 0;
   }
@@ -140,18 +135,16 @@ export class Multiplayer {
         group.add(label);
         group.visible = false;
         this.root.add(group);
-        gh = { group, label, dist: p.dist, lane: p.lane, kmh: p.kmh, name: p.name, color: p.color };
+        gh = { group, label, x: p.x, z: p.z, heading: p.heading || 0, kmh: p.kmh, name: p.name, color: p.color };
         this.ghosts.set(p.id, gh);
       }
-      // fresh targets for dead-reckoning
-      gh.tDist = p.dist; gh.tLane = p.lane; gh.tKmh = p.kmh;
+      gh.tX = p.x; gh.tZ = p.z; gh.tHeading = p.heading || 0; gh.tKmh = p.kmh;
       if (p.name !== gh.name || p.color !== gh.color) {
         gh.name = p.name; gh.color = p.color;
         paintLabel(gh.label.userData.ctx, p.name, p.color);
         gh.label.userData.tex.needsUpdate = true;
       }
     }
-    // retire drivers who left
     for (const [id, gh] of this.ghosts) {
       if (seen.has(id)) continue;
       this.root.remove(gh.group);
@@ -162,31 +155,30 @@ export class Multiplayer {
     }
   }
 
-  /** Called every frame with the hero's current world state. */
-  update(dt, heroDist, heroLane, heroName, heroColor, night = 0) {
-    this.me = { dist: heroDist, lane: heroLane, name: heroName, color: heroColor };
+  /** Called every frame with the hero's true world pose. */
+  update(dt, heroX, heroZ, heroHeading, heroName, heroColor, night = 0) {
+    this.me = { x: heroX, z: heroZ, heading: heroHeading, name: heroName, color: heroColor };
+    const cx0 = roadCenterX(heroZ);
 
     for (const gh of this.ghosts.values()) {
-      // dead reckon forward, then correct toward the last reported position
-      if (gh.tDist === undefined) { gh.tDist = gh.dist; gh.tLane = gh.lane; gh.tKmh = gh.kmh; }
-      gh.dist += (gh.tKmh / 3.6) * dt;
-      gh.dist += wrapDelta(gh.tDist - gh.dist) * Math.min(1, dt * 1.6);
-      gh.lane += (gh.tLane - gh.lane) * Math.min(1, dt * 3);
+      if (gh.tX === undefined) { gh.tX = gh.x; gh.tZ = gh.z; gh.tHeading = gh.heading; gh.tKmh = gh.kmh; }
+      // dead reckon along the reported heading, then correct toward the last fix
+      const v = gh.tKmh / 3.6;
+      gh.x += Math.sin(gh.heading) * v * dt;
+      gh.z += Math.cos(gh.heading) * v * dt;
+      gh.x += (gh.tX - gh.x) * Math.min(1, dt * 1.6);
+      gh.z += (gh.tZ - gh.z) * Math.min(1, dt * 1.6);
+      gh.heading += angleDiff(gh.heading, gh.tHeading) * Math.min(1, dt * 3);
 
-      const delta = wrapDelta(gh.dist - heroDist);
-      const visible = delta > -70 && delta < 460;
+      const localX = gh.x - cx0;
+      const localZ = gh.z - heroZ;
+      const visible = localZ > -70 && localZ < 460 && Math.abs(localX) < 700;
       gh.group.visible = visible;
       if (!visible) continue;
 
-      const h = roadHeading(gh.dist);
-      gh.group.position.set(
-        roadCenterX(gh.dist) - roadCenterX(heroDist) + Math.cos(h) * gh.lane,
-        roadY(gh.dist) - roadY(heroDist),
-        delta + Math.sin(h) * -gh.lane
-      );
-      gh.group.rotation.y = h;
-      // colour ring pulses gently, brighter at night
-      const pulse = 0.3 + 0.2 * Math.sin(performance.now() / 400 + delta);
+      gh.group.position.set(localX, 0, localZ);
+      gh.group.rotation.y = gh.heading;
+      const pulse = 0.3 + 0.2 * Math.sin(performance.now() / 400 + localZ);
       gh.group.userData.ring.material.opacity = pulse + night * 0.25;
     }
 
@@ -199,46 +191,70 @@ export class Multiplayer {
     if (!x) return;
     const W = x.canvas.width, H = x.canvas.height;
     const cx = W / 2, cy = H / 2, R = Math.min(W, H) / 2 - 12;
+    const RANGE = 520;                 // metres from centre to rim
+    const scale = R / RANGE;
+    const me = this.me, h = me.heading;
     x.clearRect(0, 0, W, H);
 
-    // the little round universe
+    // radar face
     const bg = x.createRadialGradient(cx, cy - R * 0.3, R * 0.2, cx, cy, R);
     bg.addColorStop(0, 'rgba(14,40,44,.92)');
     bg.addColorStop(1, 'rgba(4,20,24,.95)');
-    x.fillStyle = bg;
-    x.beginPath(); x.arc(cx, cy, R, 0, 7); x.fill();
-    x.lineWidth = 2; x.strokeStyle = 'rgba(240,160,32,.8)';
-    x.beginPath(); x.arc(cx, cy, R, 0, 7); x.stroke();
-    // faint lane rings + crosshair
-    x.strokeStyle = 'rgba(255,255,255,.10)'; x.lineWidth = 1;
-    for (const rr of [0.4, 0.7]) { x.beginPath(); x.arc(cx, cy, R * rr, 0, 7); x.stroke(); }
-    x.beginPath(); x.moveTo(cx, cy - R); x.lineTo(cx, cy + R); x.moveTo(cx - R, cy); x.lineTo(cx + R, cy); x.stroke();
+    x.save();
+    x.beginPath(); x.arc(cx, cy, R, 0, 7); x.clip();
+    x.fillStyle = bg; x.fillRect(0, 0, W, H);
 
-    const a0 = (this.me.dist / UNIVERSE_LEN) * Math.PI * 2;   // my heading angle
-    const place = (dist, lane) => {
-      const a = (dist / UNIVERSE_LEN) * Math.PI * 2 - a0 - Math.PI / 2;   // keep me at the top
-      const rr = R * (0.62 + Math.max(-1, Math.min(1, lane / (ROAD_W / 2))) * 0.16);
-      return [cx + Math.cos(a) * rr, cy + Math.sin(a) * rr];
+    // world→radar: rotate so my heading points up (screen -Y)
+    const toRadar = (wx, wz) => {
+      const rx = wx - me.x, rz = wz - me.z;
+      const right = rx * Math.cos(h) - rz * Math.sin(h);
+      const fwd = rx * Math.sin(h) + rz * Math.cos(h);
+      return [cx + right * scale, cy - fwd * scale];
     };
 
-    // other drivers
-    for (const gh of this.ghosts.values()) {
-      const [px, py] = place(gh.dist, gh.lane);
-      dot(x, px, py, gh.color, 4);
-      label(x, px, py + 12, gh.name, gh.color);
+    // the road as a ribbon on the radar
+    x.strokeStyle = 'rgba(120,130,140,.55)'; x.lineWidth = 5; x.lineCap = 'round';
+    x.beginPath();
+    for (let d = me.z - RANGE; d <= me.z + RANGE; d += 30) {
+      const [px, py] = toRadar(roadCenterX(d), d);
+      if (d === me.z - RANGE) x.moveTo(px, py); else x.lineTo(px, py);
     }
-    // me, always at the top, highlighted
-    const [mx, my] = place(this.me.dist, this.me.lane);
-    x.beginPath(); x.arc(mx, my, 8, 0, 7);
-    x.fillStyle = 'rgba(251,219,74,.25)'; x.fill();
-    dot(x, mx, my, this.me.color, 5.5);
-    x.strokeStyle = '#fff'; x.lineWidth = 1.5; x.stroke();
-    label(x, mx, my - 13, this.me.name, '#fbdb4a', true);
+    x.stroke();
+    // centre lane dashes
+    x.strokeStyle = 'rgba(251,219,74,.5)'; x.lineWidth = 1.4; x.setLineDash([4, 6]);
+    x.stroke(); x.setLineDash([]);
+    x.restore();
+
+    // rim + rings
+    x.lineWidth = 2; x.strokeStyle = 'rgba(240,160,32,.8)';
+    x.beginPath(); x.arc(cx, cy, R, 0, 7); x.stroke();
+    x.strokeStyle = 'rgba(255,255,255,.10)'; x.lineWidth = 1;
+    for (const rr of [0.5]) { x.beginPath(); x.arc(cx, cy, R * rr, 0, 7); x.stroke(); }
+
+    // other drivers (clamped to the rim so you know which way to go)
+    for (const gh of this.ghosts.values()) {
+      let [px, py] = toRadar(gh.x, gh.z);
+      const dx = px - cx, dy = py - cy, len = Math.hypot(dx, dy);
+      let clamped = false;
+      if (len > R - 4) { px = cx + dx / len * (R - 4); py = cy + dy / len * (R - 4); clamped = true; }
+      dot(x, px, py, gh.color, clamped ? 3 : 4);
+      if (!clamped) label(x, px, py + 11, gh.name, gh.color);
+    }
+
+    // me — an arrow pointing up at the centre
+    x.save();
+    x.translate(cx, cy);
+    x.fillStyle = me.color;
+    x.beginPath(); x.moveTo(0, -7); x.lineTo(5, 6); x.lineTo(0, 3); x.lineTo(-5, 6); x.closePath();
+    x.fill();
+    x.strokeStyle = '#fff'; x.lineWidth = 1.4; x.stroke();
+    x.restore();
+    label(x, cx, cy + 14, me.name, '#fbdb4a');
 
     // header
     x.fillStyle = 'rgba(253,246,227,.9)';
     x.textAlign = 'center'; x.font = '700 11px Rajdhani, sans-serif';
-    x.fillText(`${this.ghosts.size + 1} on the ring`, cx, 13);
+    x.fillText(`${this.ghosts.size + 1} on the map`, cx, 13);
   }
 }
 
@@ -246,9 +262,9 @@ function dot(x, px, py, color, r) {
   x.beginPath(); x.arc(px, py, r, 0, 7);
   x.fillStyle = color; x.fill();
 }
-function label(x, px, py, name, color, above = false) {
+function label(x, px, py, name, color) {
   x.font = '700 10px Rajdhani, sans-serif';
-  x.textAlign = 'center'; x.textBaseline = above ? 'bottom' : 'top';
+  x.textAlign = 'center'; x.textBaseline = 'top';
   x.lineWidth = 3; x.strokeStyle = 'rgba(4,20,24,.85)';
   const t = name.slice(0, 12);
   x.strokeText(t, px, py);

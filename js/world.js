@@ -80,10 +80,11 @@ export function roadCenterX(d) {
        + Math.sin(d * LOOP_W * 7 + 0.7) * 6;
 }
 
-/** Road elevation — long rolling crests, also periodic so the loop meets itself. */
-export function roadY(d) {
-  return Math.sin(d * LOOP_W) * 7.5
-       + Math.sin(d * LOOP_W * 2 + 2.1) * 2.6;
+/** Road elevation. Flat now: the world is a free-roam open plain you can drive
+ * off the road onto in any direction, and terrain-following on a 2D map isn't
+ * worth the tilt jitter — so everything sits at y = 0. */
+export function roadY(_d) {
+  return 0;
 }
 
 /** Heading (radians) of the centreline, for orienting the truck and traffic. */
@@ -1101,9 +1102,24 @@ export class World {
     this.targetRoadW = ROAD_W;
     this.laneCount = 2;
 
+    // Infinite ground: one big plane that follows the truck, its texture locked
+    // to world coordinates so it reads as an endless plain you can roam in any
+    // direction — not just a strip beside the road.
     const grd = ART.groundTexture();
-    this.ground = new Ribbon(420, new THREE.MeshStandardMaterial({ map: grd, roughness: 1 }), 16, -0.06, 26);
-    scene.add(this.ground.mesh);
+    grd.wrapS = grd.wrapT = THREE.RepeatWrapping;
+    this.groundTile = 60;                                   // texture repeats every 60 m
+    this.groundSize = 3200;
+    const gRepeat = this.groundSize / this.groundTile;
+    grd.repeat.set(gRepeat, gRepeat);
+    this.groundPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(this.groundSize, this.groundSize, 1, 1),
+      new THREE.MeshStandardMaterial({ map: grd, roughness: 1 })
+    );
+    this.groundPlane.rotation.x = -Math.PI / 2;
+    this.groundPlane.position.y = -0.06;
+    this.groundPlane.receiveShadow = true;
+    this.groundPlane.frustumCulled = false;
+    scene.add(this.groundPlane);
 
     // Board artwork is baked ONCE into pools. Repainting a 1024×512 canvas the
     // moment a hoarding recycles cost over a second of frame time; swapping a
@@ -1315,7 +1331,7 @@ export class World {
   // +1 lane for every 2 drivers online, so more people fit on the road. Base is
   // 2 lanes; the ribbon eases out to the new width over a second or so.
   setDriverCount(n) {
-    const lanes = Math.min(14, 2 + Math.floor(Math.max(0, n) / 2));
+    const lanes = Math.min(5, 2 + Math.floor(Math.max(0, n) / 2));   // capped at 5 lanes
     this.laneCount = lanes;
     this.targetRoadW = ROAD_W + (lanes - 2) * LANE_STEP;
   }
@@ -1392,7 +1408,15 @@ export class World {
     this.roadW += (this.targetRoadW - this.roadW) * Math.min(1, dt * 1.5);
     this.road.width = this.roadW;
     this.road.update(dist);
-    this.ground.update(dist);
+
+    // Follow the truck with the infinite ground plane and lock its texture to
+    // world coordinates. In the render frame the truck sits at local X =
+    // playerLane, Z = 0, and world X = roadCenterX(dist) + playerLane.
+    const worldX = roadCenterX(dist) + (playerLane || 0);
+    this.groundPlane.position.set(playerLane || 0, -0.06, 0);
+    const T = this.groundTile, half = (this.groundSize / T) / 2;
+    const gtex = this.groundPlane.material.map;
+    gtex.offset.set(worldX / T - half, -dist / T - half);
 
     // props
     this._rebuildBudget = 1;          // amortise expensive rebuilds across frames
