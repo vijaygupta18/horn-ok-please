@@ -10,7 +10,7 @@
 // size here so nobody can wedge a megabyte into a slot. No npm deps, no build.
 
 const KEY = 'its:billboards';
-const SLOTS = 12;                 // must match BILLBOARD_COUNT in js/world.js
+const SLOTS = 30;                 // must match BILLBOARD_COUNT in js/world.js
 const MAX_IMG = 120000;           // ~120 KB data URL ceiling per slot
 
 const KV_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;

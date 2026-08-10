@@ -29,6 +29,8 @@ export class Presence {
     this.state = o.state || (() => ({ dist: 0, lane: 0, kmh: 0 }));
     this.onUpdate = o.onUpdate || (() => {});
     this.onRoster = o.onRoster || (() => {});
+    this.onSpawn = o.onSpawn || (() => {});      // fired once: a WiFi-mate's distance
+    this._spawned = false;
 
     this.id = Math.random().toString(36).slice(2) + Date.now().toString(36);
     this.count = FLOOR;
@@ -77,6 +79,10 @@ export class Presence {
         const others = data.players.filter((p) => p.id !== this.id);
         this.onRoster(others);
         this._setCount(typeof data.count === 'number' ? data.count : others.length + 1);
+        if (!this._spawned && typeof data.spawn === 'number') {
+          this._spawned = true;
+          this.onSpawn(data.spawn);
+        }
         return;
       }
       throw new Error('no players');
@@ -118,6 +124,11 @@ export class Presence {
     }
     this.onRoster(others);
     this._setCount(others.length + 1);
+    // same machine counts as the same "network" — spawn near another local tab
+    if (!this._spawned && others.length) {
+      this._spawned = true;
+      this.onSpawn(others[0].dist);
+    }
   }
 
   _leave() {

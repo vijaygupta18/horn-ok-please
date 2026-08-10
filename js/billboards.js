@@ -1,24 +1,32 @@
 // billboards.js — the shared "upload your photo" billboards.
 //
-// world.js scatters special billboard props down the highway, each locked to a
-// shared slot id (0 … BILLBOARD_COUNT-1) via billboardSlot(). This module:
+// The highway is a loop (see world.js). A billboard stands at every multiple of
+// BILLBOARD_SPACING, so there are BILLBOARD_COUNT of them around the ring — a lot
+// of them, at exact positions every client agrees on. Each maps to a shared slot
+// (0…COUNT-1); whatever photo has been uploaded to that slot is painted on the
+// board for everybody, credited to the uploader's truck name.
 //
-//   • paints every billboard face with whatever image has been uploaded to its
-//     slot (or a "park & upload" placeholder),
-//   • draws a glowing pad on the road below each one,
-//   • notices when the hero truck parks on a pad and offers the upload menu,
-//   • talks to /api/billboards so uploads are shared with everyone (with a
-//     localStorage fallback so it still works offline / on a plain file server).
+// This module owns the billboard meshes directly (a small reused pool that
+// covers the visible stretch of road), the glowing road pad under each, the
+// floating credit plate above each, and the upload menu. It talks to
+// /api/billboards so uploads are shared with everyone, with a localStorage
+// fallback so it still works offline / on a plain file server.
 
 import * as THREE from 'three';
-import { roadCenterX, roadY, roadHeading, ROAD_W, billboardSlot, BILLBOARD_COUNT } from './world.js';
+import {
+  makeBillboard, billboardSlot, BILLBOARD_COUNT, BILLBOARD_SPACING,
+  ROAD_W, roadCenterX, roadY, roadHeading,
+} from './world.js';
 
 const POLL_MS = 15000;
 const LS_KEY = 'its_billboards_v1';
+const BOARD_OFF = 4;            // metres the board stands beyond the tarmac edge
 const PAD_INSET = 0.9;          // how far onto the tarmac the pad sits from the edge
 const NEAR_REL = 11;            // metres along the road to count as "at" the board
-const NEAR_LAT = 3.2;           // lateral metres to count as "pulled over to it"
-const PARK_KMH = 12;            // must be crawling/stopped to upload
+const NEAR_LAT = 3.2;          // lateral metres to count as "pulled over to it"
+const PARK_KMH = 12;           // must be crawling/stopped to upload
+const AHEAD = 440;             // how far ahead to render boards
+const BEHIND = 60;             // how far behind to keep them
 
 const $ = (s) => document.querySelector(s);
 
@@ -55,7 +63,6 @@ function makePad() {
     new THREE.MeshBasicMaterial({ color: '#8ffbe8', transparent: true, opacity: 0.7, side: THREE.DoubleSide, depthWrite: false }));
   ring.rotation.x = -Math.PI / 2; ring.position.y = 0.06;
   g.add(ring);
-  // a faint upward beam so you can spot the pad from a distance
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 2.2, 7, 16, 1, true),
     new THREE.MeshBasicMaterial({ color: '#2fe0c8', transparent: true, opacity: 0.08, side: THREE.DoubleSide, depthWrite: false }));
   beam.position.y = 3.5;
@@ -67,7 +74,6 @@ function makePad() {
 export class Billboards {
   constructor(scene, world, identity) {
     this.scene = scene;
-    this.world = world;
     this.identity = identity || (() => 'Anonymous');   // () => my truck's name
     this.root = new THREE.Group();
     scene.add(this.root);
@@ -77,8 +83,8 @@ export class Billboards {
     this.slotTex = {};                    // { slot: THREE.Texture }
     for (const [slot, e] of Object.entries(this.gallery)) if (e?.src) this._buildSlotTex(+slot, e.src);
 
+    this.boards = [];                     // reused mesh pool covering the visible road
     this.nearby = null;                   // { slot } when parked at a board
-    this._pads = [];                      // reusable pad pool
     this.live = false;
 
     this._bindUI();
@@ -86,80 +92,96 @@ export class Billboards {
     this._pollTimer = setInterval(() => this._poll(), POLL_MS);
   }
 
+  _makeEntry() {
+    const group = makeBillboard();
+    let face = null;
+    group.traverse((o) => { if (o.userData.billboardFace) face = o; });
+    const credit = makeCreditLabel();
+    credit.position.set(0, 11.0, 0.3);
+    group.add(credit);
+    const pad = makePad();
+    group.visible = false; pad.visible = false;
+    this.root.add(group);
+    this.root.add(pad);
+    return { group, face, credit, pad, token: null, creditToken: null };
+  }
+
   // ── per-frame ──────────────────────────────────────────────────────────────
 
-  update(dt, dist, lane, kmh, night, t) {
-    const boards = this.world.props.filter((p) => p.kind === 'billboard' && p.obj.visible);
-    let best = null;
-
-    // make sure we have enough pads
-    while (this._pads.length < boards.length) {
-      const pad = makePad();
-      this.root.add(pad);
-      this._pads.push(pad);
-    }
-    for (const pad of this._pads) pad.visible = false;
+  update(dt, dist, lane, kmh, night, t, roadW = ROAD_W) {
+    const SP = BILLBOARD_SPACING;
+    const iMin = Math.ceil((dist - BEHIND) / SP);
+    const iMax = Math.floor((dist + AHEAD) / SP);
+    const need = Math.max(0, iMax - iMin + 1);
+    while (this.boards.length < need) this.boards.push(this._makeEntry());
 
     const cx0 = roadCenterX(dist), y0 = roadY(dist);
-    boards.forEach((rec, i) => {
-      const slot = billboardSlot(rec.d);
-      this._paintFace(rec, slot);
-      this._paintCredit(rec, slot);
+    let best = null;
 
-      // pad on the road edge in front of the board
-      const padLat = rec.side * (ROAD_W / 2 - PAD_INSET);
-      const h = roadHeading(rec.d);
-      const rel = rec.d - dist;
-      const pad = this._pads[i];
-      pad.visible = true;
-      pad.position.set(
-        roadCenterX(rec.d) - cx0 + Math.cos(h) * padLat,
-        roadY(rec.d) - y0 + 0.02,
+    for (let k = 0; k < this.boards.length; k++) {
+      const e = this.boards[k];
+      if (k >= need) { e.group.visible = false; e.pad.visible = false; continue; }
+
+      const i = iMin + k;
+      const d = i * SP;
+      const slot = ((i % BILLBOARD_COUNT) + BILLBOARD_COUNT) % BILLBOARD_COUNT;
+      const side = (i % 2 === 0) ? 1 : -1;              // deterministic: same board, same side for all
+      const h = roadHeading(d), rel = d - dist;
+
+      const boardLat = side * (roadW / 2 + BOARD_OFF);
+      e.group.visible = true;
+      e.group.position.set(
+        roadCenterX(d) - cx0 + Math.cos(h) * boardLat,
+        roadY(d) - y0,
+        rel + Math.sin(h) * -boardLat
+      );
+      e.group.rotation.y = Math.PI + h;                 // face oncoming traffic
+      this._paintFace(e, slot);
+      this._paintCredit(e, slot);
+      for (const c of e.group.children) {
+        if (c.userData.bulb) c.material.emissiveIntensity = 0.08 + night * 0.5;
+      }
+
+      // glowing pad on the tarmac edge in front of the board
+      const padLat = side * (roadW / 2 - PAD_INSET);
+      e.pad.visible = true;
+      e.pad.position.set(
+        roadCenterX(d) - cx0 + Math.cos(h) * padLat,
+        roadY(d) - y0 + 0.02,
         rel + Math.sin(h) * -padLat
       );
-
-      const latDist = Math.abs(lane - padLat);
-      const parked = Math.abs(rel) < NEAR_REL && latDist < NEAR_LAT && kmh < PARK_KMH;
+      const parked = Math.abs(rel) < NEAR_REL && Math.abs(lane - padLat) < NEAR_LAT && kmh < PARK_KMH;
       const glow = parked ? 1 : 0.35 + 0.2 * Math.sin(t * 3 + i);
-      pad.userData.disc.material.opacity = 0.16 + glow * 0.4 + night * 0.15;
-      pad.userData.ring.material.opacity = 0.4 + glow * 0.5;
-      pad.userData.beam.material.opacity = 0.05 + glow * 0.12 + night * 0.05;
-      pad.scale.setScalar(parked ? 1.08 + 0.05 * Math.sin(t * 6) : 1);
+      e.pad.userData.disc.material.opacity = 0.16 + glow * 0.4 + night * 0.15;
+      e.pad.userData.ring.material.opacity = 0.4 + glow * 0.5;
+      e.pad.userData.beam.material.opacity = 0.05 + glow * 0.12 + night * 0.05;
+      e.pad.scale.setScalar(parked ? 1.08 + 0.05 * Math.sin(t * 6) : 1);
 
       if (parked && (!best || Math.abs(rel) < Math.abs(best.rel))) best = { slot, rel };
-    });
+    }
 
     this._setNearby(best ? { slot: best.slot } : null);
   }
 
-  _paintFace(rec, slot) {
-    if (!rec._face) rec.obj.traverse((o) => { if (o.userData.billboardFace) rec._face = o; });
-    const face = rec._face;
-    if (!face) return;
+  _paintFace(e, slot) {
+    if (!e.face) return;
     const token = this.gallery[slot]?.src || 'ph';
-    if (rec._token === token) return;
-    rec._token = token;
-    face.material.map = this.slotTex[slot] || this.placeholder;
-    face.material.needsUpdate = true;
+    if (e.token === token) return;
+    e.token = token;
+    e.face.material.map = this.slotTex[slot] || this.placeholder;
+    e.face.material.needsUpdate = true;
   }
 
   // Floating "📷 by <trucker>" plate above a board that has an uploaded photo.
-  _paintCredit(rec, slot) {
+  _paintCredit(e, slot) {
     const by = this.gallery[slot]?.by || '';
-    if (!rec._credit) {
-      const label = makeCreditLabel();
-      label.position.set(0, 11.0, 0.3);   // above the board face
-      rec.obj.add(label);
-      rec._credit = label;
-    }
     const token = by || 'none';
-    if (rec._creditToken !== token) {
-      rec._creditToken = token;
-      rec._credit.visible = !!by;
-      if (by) {
-        paintCredit(rec._credit.userData.ctx, by);
-        rec._credit.userData.tex.needsUpdate = true;
-      }
+    if (e.creditToken === token) return;
+    e.creditToken = token;
+    e.credit.visible = !!by;
+    if (by) {
+      paintCredit(e.credit.userData.ctx, by);
+      e.credit.userData.tex.needsUpdate = true;
     }
   }
 
@@ -205,6 +227,8 @@ export class Billboards {
         this._disposeSlot(slot);
       }
     }
+    // force the visible boards to re-check their textures next frame
+    for (const b of this.boards) { b.token = null; b.creditToken = null; }
     this._saveLocal();
   }
 
@@ -241,6 +265,7 @@ export class Billboards {
     // paint it locally right away — no waiting on the round trip
     this.gallery[slot] = { src: dataURL, by };
     this._buildSlotTex(slot, dataURL);
+    for (const b of this.boards) { b.token = null; b.creditToken = null; }
     this._saveLocal();
     try {
       await fetch('/api/billboards', {
@@ -292,7 +317,6 @@ export class Billboards {
     const url = URL.createObjectURL(file);
     img.onload = () => {
       URL.revokeObjectURL(url);
-      // downscale to the board's ~2:1 face with a centred cover crop
       const W = 512, H = 252;
       const c = document.createElement('canvas');
       c.width = W; c.height = H;
@@ -302,7 +326,6 @@ export class Billboards {
       const dw = img.width * s, dh = img.height * s;
       x.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
       this._pending = c.toDataURL('image/jpeg', 0.72);
-      // preview
       if (this.preview) {
         const p = this.preview.getContext('2d');
         p.drawImage(c, 0, 0, this.preview.width, this.preview.height);

@@ -48,8 +48,9 @@ function readBody(req) {
 const str = (v, n) => String(v == null ? '' : v).slice(0, n);
 const num = (v) => (Number.isFinite(+v) ? Math.round(+v * 100) / 100 : 0);
 
-// Turn a stored value into a clean roster entry, or null if stale/garbage.
-function entry(id, raw, now) {
+// Parse a stored value into a full record (incl. the private network id used to
+// group drivers on the same WiFi), or null if stale/garbage.
+function record(id, raw, now) {
   let v;
   try { v = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return null; }
   if (!v || typeof v !== 'object') return null;
@@ -61,8 +62,23 @@ function entry(id, raw, now) {
     dist: num(v.dist),
     lane: num(v.lane),
     kmh: num(v.kmh),
+    net: str(v.net, 64),          // network group (hashed IP) — never returned
+    ts: v.ts || 0,
   };
 }
+
+// A coarse network id from the caller's IP, so people behind the same router
+// (same WiFi / NAT) share a group. Hashed so we never store a raw address.
+function netId(req) {
+  const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const ip = xff || req.socket?.remoteAddress || 'local';
+  let h = 5381;
+  for (let i = 0; i < ip.length; i++) h = ((h << 5) + h + ip.charCodeAt(i)) | 0;
+  return 'n' + (h >>> 0).toString(36);
+}
+
+// The public view of a driver — network id stripped out.
+const publicOf = ({ id, name, color, dist, lane, kmh }) => ({ id, name, color, dist, lane, kmh });
 
 module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
@@ -75,11 +91,21 @@ module.exports = async (req, res) => {
   const id = str(body.id || url.searchParams.get('id'), 64);
   const leaving = body.leave === true || url.searchParams.get('leave') === '1';
   const now = Date.now();
+  const net = netId(req);
 
   const mine = id ? JSON.stringify({
     name: str(body.name, 20), color: str(body.color, 12),
-    dist: num(body.dist), lane: num(body.lane), kmh: num(body.kmh), ts: now,
+    dist: num(body.dist), lane: num(body.lane), kmh: num(body.kmh), net, ts: now,
   }) : null;
+
+  // Spawn a newcomer near a driver already on the same WiFi. It's the nearest
+  // network-mate ahead of us on the loop (or just any mate) so we appear together.
+  function spawnFor(records, myDist) {
+    const mates = records.filter((r) => r.id !== id && r.net === net);
+    if (!mates.length) return null;
+    mates.sort((a, b) => b.ts - a.ts);         // most recently active mate
+    return mates[0].dist;
+  }
 
   try {
     if (KV_URL && KV_TOKEN) {
@@ -87,26 +113,27 @@ module.exports = async (req, res) => {
       else if (id) await kvCmd(['hset', KEY, id], mine);
 
       const arr = (await kvCmd(['hgetall', KEY])) || [];
-      const players = [];
+      const records = [];
       const stale = [];
       for (let i = 0; i < arr.length; i += 2) {
-        const e = entry(arr[i], arr[i + 1], now);
-        if (e) players.push(e); else stale.push(arr[i]);
+        const r = record(arr[i], arr[i + 1], now);
+        if (r) records.push(r); else stale.push(arr[i]);
       }
-      // Best-effort prune of expired drivers; don't block the response on it.
       for (const s of stale) kvCmd(['hdel', KEY, s]).catch(() => {});
-      return res.status(200).json({ count: players.length, players: players.slice(0, MAX_PLAYERS), source: 'kv' });
+      const players = records.map(publicOf).slice(0, MAX_PLAYERS);
+      return res.status(200).json({ count: records.length, players, spawn: spawnFor(records, num(body.dist)), source: 'kv' });
     }
 
     // in-memory fallback
     if (id && leaving) MEM.delete(id);
     else if (id) MEM.set(id, mine);
-    const players = [];
+    const records = [];
     for (const [k, raw] of MEM) {
-      const e = entry(k, raw, now);
-      if (e) players.push(e); else MEM.delete(k);
+      const r = record(k, raw, now);
+      if (r) records.push(r); else MEM.delete(k);
     }
-    return res.status(200).json({ count: players.length, players: players.slice(0, MAX_PLAYERS), source: 'memory' });
+    const players = records.map(publicOf).slice(0, MAX_PLAYERS);
+    return res.status(200).json({ count: records.length, players, spawn: spawnFor(records, num(body.dist)), source: 'memory' });
   } catch (e) {
     // Never let a storage hiccup break the page — the client falls back on its own.
     return res.status(200).json({ count: null, players: [], error: String((e && e.message) || e) });

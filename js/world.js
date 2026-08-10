@@ -10,24 +10,27 @@ import { buildTruck, refreshRearPanel } from './truck.js';
 
 const PAL = ART.PAL;
 
-export const ROAD_W = 11;      // asphalt width (two generous lanes + shoulders)
+export const ROAD_W = 11;      // base asphalt width (two generous lanes + shoulders)
 export const LANE = 2.6;       // centre of a lane, offset from road centre
+const LANE_STEP = 3.4;         // extra tarmac width added per extra lane
 const VIEW = 430;              // metres of road built ahead
 const BEHIND = 45;
 const SEGS = 190;
 
 // ── the "small round universe" ──────────────────────────────────────────────
-// The highway is procedurally endless, but for multiplayer + the upload
-// billboards we treat it as a ring: distance wraps every UNIVERSE_LEN metres, so
-// everyone eventually meets and the gallery of billboards repeats. A special
-// billboard stands every BILLBOARD_SPACING metres; its slot id (0…COUNT-1) is
-// the shared key every client agrees on, so an upload lands on the same board
-// for everybody.
-export const BILLBOARD_SPACING = 600;
-export const BILLBOARD_COUNT = 12;
-export const UNIVERSE_LEN = BILLBOARD_SPACING * BILLBOARD_COUNT;   // 7.2 km loop
+// The highway is a genuine LOOP: the road shape functions below are periodic
+// with period UNIVERSE_LEN, so after driving that far you arrive back where you
+// started, past the same scenery and the same billboards. That is what lets
+// multiplayer drivers actually meet — two drivers at the same distance-modulo
+// stand at the same spot on the ring. A special upload billboard stands every
+// BILLBOARD_SPACING metres; its slot id (0…COUNT-1) is the shared key every
+// client agrees on, so an upload lands on the same board for everybody.
+export const BILLBOARD_SPACING = 220;                              // one every 220 m
+export const BILLBOARD_COUNT = 30;                                 // 30 upload boards
+export const UNIVERSE_LEN = BILLBOARD_SPACING * BILLBOARD_COUNT;   // 6.6 km loop
+const LOOP_W = (Math.PI * 2) / UNIVERSE_LEN;                       // 1 lap = 2π
 
-/** Stable, shared slot id for a special billboard standing at distance `d`. */
+/** Stable, shared slot id for the billboard standing at distance `d`. */
 export function billboardSlot(d) {
   const k = Math.round(d / BILLBOARD_SPACING);
   return ((k % BILLBOARD_COUNT) + BILLBOARD_COUNT) % BILLBOARD_COUNT;
@@ -67,16 +70,20 @@ export const TIME_MODES = [
   { id: 'cycle', label: 'FAST CYCLE', hi: 'तेज़ चक्र' },
 ];
 
+// These are PERIODIC in UNIVERSE_LEN (every term is an integer multiple of the
+// loop frequency LOOP_W), so roadCenterX(d) === roadCenterX(d + UNIVERSE_LEN):
+// the highway closes into a ring. Amplitudes are chosen to read like the old
+// endless road, just now it repeats once per lap.
 export function roadCenterX(d) {
-  return Math.sin(d * 0.00071 + 1.3) * 48
-       + Math.sin(d * 0.0021) * 22
-       + Math.sin(d * 0.0053 + 0.7) * 6;
+  return Math.sin(d * LOOP_W + 1.3) * 48
+       + Math.sin(d * LOOP_W * 3) * 22
+       + Math.sin(d * LOOP_W * 7 + 0.7) * 6;
 }
 
-/** Road elevation — long rolling crests so the highway disappears over hills. */
+/** Road elevation — long rolling crests, also periodic so the loop meets itself. */
 export function roadY(d) {
-  return Math.sin(d * 0.00041) * 7.5
-       + Math.sin(d * 0.00133 + 2.1) * 2.6;
+  return Math.sin(d * LOOP_W) * 7.5
+       + Math.sin(d * LOOP_W * 2 + 2.1) * 2.6;
 }
 
 /** Heading (radians) of the centreline, for orienting the truck and traffic. */
@@ -330,7 +337,7 @@ function makeHoarding(pool) {
 // mesh is tagged so js/billboards.js can paint it with either a placeholder or
 // whatever a player has uploaded to this board's shared slot. The glowing pad on
 // the road below it is drawn separately (js/billboards.js), in world space.
-function makeBillboard() {
+export function makeBillboard() {
   const g = new THREE.Group();
   for (const sx of [-3.3, 3.3]) {
     const p = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.2, 7.4, 8),
@@ -699,7 +706,7 @@ function makeShrine() {
 // on +Z, but the driver travels toward +Z — so left at rotation 0 they present
 // their back and every word comes out mirrored. These must be turned to face
 // oncoming traffic no matter which side of the road they stand on.
-const LETTERED = new Set(['hoarding', 'sign', 'safety', 'milestone', 'dhaba', 'billboard']);
+const LETTERED = new Set(['hoarding', 'sign', 'safety', 'milestone', 'dhaba']);
 
 /**
  * Run expensive canvas work off the render frame.
@@ -1089,6 +1096,10 @@ export class World {
     roadTex.wrapT = THREE.RepeatWrapping;
     this.road = new Ribbon(ROAD_W, new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.94 }), 14, 0.02);
     scene.add(this.road.mesh);
+    // The carriageway widens as more drivers join — see setDriverCount().
+    this.roadW = ROAD_W;
+    this.targetRoadW = ROAD_W;
+    this.laneCount = 2;
 
     const grd = ART.groundTexture();
     this.ground = new Ribbon(420, new THREE.MeshStandardMaterial({ map: grd, roughness: 1 }), 16, -0.06, 26);
@@ -1161,11 +1172,7 @@ export class World {
 
   _spawnProp(kind, d, side) {
     let obj, off, centered = false;
-    // Snap upload billboards onto the shared grid so every client agrees which
-    // slot a board belongs to.
-    if (kind === 'billboard') d = Math.round(d / BILLBOARD_SPACING) * BILLBOARD_SPACING;
     switch (kind) {
-      case 'billboard': obj = makeBillboard();  off = rnd(8, 11); break;
       case 'tree':      obj = makeTree();       off = rnd(9, 34); break;
       case 'pole':      obj = makePole();       off = 8.6; break;
       case 'milestone': obj = makeMilestone(Math.round(HWY_START + d / 1000 * HWY_SCALE)); off = 6.8; break;
@@ -1208,11 +1215,9 @@ export class World {
     for (let d = 250; d < VIEW; d += 400) this._spawnProp('temple', d, flip());
     for (let d = 80; d < VIEW; d += 190) this._spawnProp('shrine', d, flip());
     for (let d = 180; d < VIEW; d += 260) this._spawnProp('tractor', d, flip());
-    // A couple of upload billboards in rotation — they recycle forward and snap
-    // onto the shared slot grid (distinct multiples of BILLBOARD_SPACING), so you
-    // meet one every few hundred metres and each maps to its own shared slot.
-    this._spawnProp('billboard', BILLBOARD_SPACING, 1);
-    this._spawnProp('billboard', BILLBOARD_SPACING * 2, -1);
+    // NB: the upload billboards are NOT props — they're a dedicated grid on the
+    // loop, owned by js/billboards.js, so there can be a lot of them at exact
+    // shared positions. See Billboards.
     // village clusters
     for (let d = 200; d < VIEW; d += 340) {
       const s = flip();
@@ -1255,8 +1260,6 @@ export class World {
     // Jump forward in whole view-lengths so a long stall can't leave it behind.
     const span = VIEW + BEHIND;
     while (rec.d - this.dist < -BEHIND) rec.d += span;
-    // Keep billboards locked to the shared slot grid as they roll forward.
-    if (rec.kind === 'billboard') rec.d = Math.round(rec.d / BILLBOARD_SPACING) * BILLBOARD_SPACING;
     if (!rec.centered) rec.side = Math.random() < 0.5 ? -1 : 1;
 
     const mustRebuild = kind !== rec.kind || World.REBUILD.has(kind);
@@ -1307,6 +1310,14 @@ export class World {
       this.trafficRoot.add(obj);
       this.traffic.push(rec);
     }
+  }
+
+  // +1 lane for every 2 drivers online, so more people fit on the road. Base is
+  // 2 lanes; the ribbon eases out to the new width over a second or so.
+  setDriverCount(n) {
+    const lanes = Math.min(14, 2 + Math.floor(Math.max(0, n) / 2));
+    this.laneCount = lanes;
+    this.targetRoadW = ROAD_W + (lanes - 2) * LANE_STEP;
   }
 
   /** Nearest dhaba ahead, in metres (or null). Used for the refuel prompt. */
@@ -1377,6 +1388,9 @@ export class World {
     if (this._envTimer <= 0) { this._envTimer = 3.5; this._updateEnv(ph); }
 
     // ribbons
+    // ease the carriageway toward the target width (lanes scale with players)
+    this.roadW += (this.targetRoadW - this.roadW) * Math.min(1, dt * 1.5);
+    this.road.width = this.roadW;
     this.road.update(dist);
     this.ground.update(dist);
 
@@ -1397,7 +1411,7 @@ export class World {
       p.obj.rotation.y = p.rot + h;
       p.obj.visible = z > -BEHIND && z < VIEW;
       // dhaba string lights + temple flag come alive at dusk
-      if (p.kind === 'dhaba' || p.kind === 'billboard') {
+      if (p.kind === 'dhaba') {
         for (const c of p.obj.children) {
           if (c.userData.bulb) c.material.emissiveIntensity = 0.08 + this.night * 0.45;
         }
