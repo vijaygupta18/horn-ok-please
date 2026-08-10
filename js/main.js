@@ -161,10 +161,19 @@ const cowState = { active: false, d: 0, lane: 0, hitCooldown: 0 };
 
 // ── driving state ──────────────────────────────────────────────────────────
 
+// The world is a free-roam 2D plain. The truck has a real world position
+// (x, z) and a heading it can point anywhere — you can leave the road entirely.
+// `dist` and `lane` are DERIVED each frame (dist = z; lane = how far x is from
+// the road centreline at this z) so the rest of the engine — which builds the
+// road, props, traffic and billboards along z — keeps working unchanged.
 const S = {
-  dist: 0,
+  x: 0,                // world position, metres
+  z: 0,
+  heading: 0,          // yaw, radians; 0 = facing +z ("north" up the road)
+  odo: 0,              // total distance driven, for the trip meter
+  dist: 0,             // = z (derived)
   speed: 0,            // m/s
-  lane: LANE,          // lateral offset from road centre
+  lane: LANE,          // = x - roadCenterX(z) (derived)
   steer: 0,            // smoothed steering, -1..1
   throttle: 0,
   braking: false,
@@ -183,6 +192,18 @@ const S = {
 };
 const MAX_SPEED = 29;      // ~104 km/h
 const REVERSE_MAX = 6;     // ~21 km/h — nobody reverses a loaded lorry faster
+const TURN_RATE = 1.15;    // rad/s of heading change at full lock + full grip
+const OFFROAD_MAX = 0.62;  // fraction of top speed you can manage on the dirt
+
+// Set the truck's 2D pose from a road-frame position (z along the road, lane
+// offset from centre) plus a heading. Keeps the derived values in sync.
+function placePose(z, lane, heading) {
+  S.z = z;
+  S.x = roadCenterX(z) + lane;
+  S.heading = heading;
+  S.dist = z;
+  S.lane = lane;
+}
 // The drivable half-width. It grows as the road widens with more drivers
 // online (world.roadW), so it's recomputed each frame — see the loop.
 let LANE_LIMIT = ROAD_W / 2 - 1.35;
@@ -273,17 +294,17 @@ const billboards = new Billboards(scene, world, () => driver.name);
 
 const presence = new Presence({
   identity: () => ({ name: driver.name, color: driver.color }),
-  state: () => ({ dist: S.dist, lane: S.lane, kmh: Math.abs(S.speed) * KMH }),
+  state: () => ({ x: S.x, z: S.z, heading: S.heading, kmh: Math.abs(S.speed) * KMH }),
   onRoster: (players) => {
     multiplayer.setRoster(players);
     // +1 lane for every 2 drivers (you + everyone else), so more people fit.
     world.setDriverCount(players.length + 1);
   },
-  onSpawn: (dist) => {
+  onSpawn: (spawn) => {
     // A driver on your WiFi is already out there — drop in just behind them so
     // you meet on the road straight away. Only ever fires once.
-    if (!(dist > 0)) return;
-    S.dist = Math.max(0, dist - 25);
+    if (!spawn || typeof spawn.z !== 'number') return;
+    placePose(spawn.z - 25, (spawn.x ?? 0) - roadCenterX(spawn.z), roadHeading(spawn.z));
     toast('अपने नेटवर्क वाले के पास', 'Spawned near a driver on your WiFi', true);
   },
   onUpdate: (count, delta, live) => {
@@ -842,8 +863,11 @@ function frame(now) {
     } else S.reverseHold = 0;
   }
 
-  // ---- longitudinal ---------------------------------------------------
-  const grade = (roadY(S.dist + 6) - roadY(S.dist - 6)) / 12;   // climb costs speed
+  // Are we on the dirt? (uses last frame's derived lane; a frame's lag is fine)
+  const roadEdge = world.roadW / 2;
+  const onDirt = Math.abs(S.lane) > roadEdge;
+
+  // ---- longitudinal (speed along the current heading) -----------------
   if (S.reversing) {
     // speed is negative in reverse: ↓ pushes it further negative, ↑ arrests it
     let ra = 0;
@@ -859,29 +883,33 @@ function frame(now) {
     S.revBeep -= dt;
     if (S.speed < -0.3 && S.revBeep <= 0) { S.revBeep = 0.9; sfx.reverseBeep(); }
   } else {
-    let a = S.throttle * 4.6 - grade * 8.5;
+    let a = S.throttle * 4.6;
     a -= 0.45 + 0.0022 * S.speed * S.speed;                      // rolling + drag
     if (brakeIn) a -= 9.5;
-    // Off the tarmac. Kept well below full throttle (4.6) — at 4.2 the two very
-    // nearly cancelled and a truck that wandered onto the verge could never
-    // climb back out, autopilot included.
-    if (Math.abs(S.lane) > LANE_LIMIT) a -= 2.5;
-    S.speed = clamp(S.speed + a * dt, 0, MAX_SPEED);
+    if (onDirt) a -= 1.8;                                        // dirt drags, but you can still drive
+    S.speed = clamp(S.speed + a * dt, 0, onDirt ? MAX_SPEED * OFFROAD_MAX : MAX_SPEED);
   }
 
-  // ---- lateral --------------------------------------------------------
-  // Grip comes from road speed regardless of direction; reversing mirrors the
+  // ---- steering (turn the heading — you can point anywhere) ------------
+  // Grip (hence turn authority) comes from road speed; reversing mirrors the
   // steering, exactly as backing a real vehicle does.
   const grip = Math.min(1, Math.abs(S.speed) / 6);
-  S.lane += S.steer * 7.2 * dt * grip * (S.speed < 0 ? -1 : 1);
-  const over = Math.abs(S.lane) - LANE_LIMIT;
-  if (over > 0) {
-    S.lane = Math.sign(S.lane) * (LANE_LIMIT + Math.min(over, 2.2));
+  S.heading += S.steer * TURN_RATE * dt * grip * (S.speed < 0 ? -1 : 1);
+
+  // ---- integrate the world position -----------------------------------
+  const fx = Math.sin(S.heading), fz = Math.cos(S.heading);     // forward vector
+  S.x += fx * S.speed * dt;
+  S.z += fz * S.speed * dt;
+  S.odo += Math.abs(S.speed) * dt;
+  // derive the road-frame values the rest of the engine expects
+  S.dist = S.z;
+  S.lane = S.x - roadCenterX(S.z);
+
+  if (onDirt) {
     S.offroad = 1;
     S.shake = Math.max(S.shake, Math.min(0.5, Math.abs(S.speed) / 40));
   } else S.offroad = Math.max(0, S.offroad - dt * 2);
 
-  S.dist = Math.max(0, S.dist + S.speed * dt);      // reversing walks it back
   S.fuel = Math.max(0, S.fuel - dt * (0.075 + S.throttle * 0.34 + Math.abs(S.speed) * 0.006));
   S.hornCooldown = Math.max(0, S.hornCooldown - dt);
   S.shake = Math.max(0, S.shake - dt * 1.6);
@@ -891,17 +919,18 @@ function frame(now) {
   const night = world.night;
 
   // ---- other drivers + upload billboards ------------------------------
-  multiplayer.update(dt, S.dist, S.lane, driver.name, driver.color, night);
+  multiplayer.update(dt, S.x, S.z, S.heading, driver.name, driver.color, night);
   billboards.update(dt, S.dist, S.lane, Math.abs(S.speed) * KMH, night, S.t, world.roadW);
 
-  // ---- place the truck on the road ------------------------------------
-  const h0 = roadHeading(S.dist);
-  truck.position.set(Math.cos(h0) * S.lane, 0, -Math.sin(h0) * S.lane);
-  const bump = Math.sin(S.dist * 1.7) * 0.02 + Math.sin(S.dist * 5.3) * 0.012;
-  truck.position.y = bump * Math.min(1, Math.abs(S.speed) / 10) + S.offroad * Math.sin(S.dist * 9) * 0.06;
-  truck.rotation.y = h0 + S.steer * 0.045;
+  // ---- place the truck in the render frame ----------------------------
+  // The render frame is world-axis-aligned but centred on the road at our z, so
+  // our local x IS the lane offset and local z is 0 (we're the z reference).
+  truck.position.set(S.lane, 0, 0);
+  const bump = Math.sin(S.odo * 1.7) * 0.02 + Math.sin(S.odo * 5.3) * 0.012;
+  truck.position.y = bump * Math.min(1, Math.abs(S.speed) / 10) + S.offroad * Math.sin(S.odo * 9) * 0.06;
+  truck.rotation.y = S.heading;
   truck.rotation.z = -S.steer * 0.035 * grip;                    // body roll into the turn
-  truck.rotation.x = grade * 0.5 + (S.braking ? 0.014 : 0) - S.throttle * 0.008;
+  truck.rotation.x = (S.braking ? 0.014 : 0) - S.throttle * 0.008;
 
   updateTruck(truck, dt, S.speed, S.steer, S.t, night > 0.5);
   setBrakeLights(truck, S.braking);
@@ -1040,7 +1069,7 @@ function frame(now) {
         lastKmh = kmh;
       }
     }
-    const km = (S.dist / 1000).toFixed(1);
+    const km = (S.odo / 1000).toFixed(1);
     if (km !== lastKm) { UI.km.textContent = km; lastKm = km; }
     UI.fuel.style.width = S.fuel + '%';
     const hrs = (world.timeOfDay * 24 + 6) % 24;
@@ -1148,9 +1177,17 @@ function autopilot(dt) {
   const err = target - S.speed;
   const throttle = clamp(err * 0.4, 0, 1);
   const brake = err < -2.2 ? 1 : 0;
-  // Steer harder when we're off the road, so recovery is decisive.
-  const offRoad = Math.abs(S.lane) > LANE_LIMIT;
-  const steer = clamp((autoTargetLane - S.lane) * (offRoad ? 1.1 : 0.55), -1, 1);
+
+  // Steering is now heading-based: aim the truck along the road, biased back
+  // toward the target lane, and turn toward that desired heading. This also
+  // walks the truck back onto the tarmac if it has wandered onto the dirt.
+  const roadDir = roadHeading(S.dist);
+  const laneErr = S.lane - autoTargetLane;
+  const headingBias = clamp(-laneErr * 0.05, -0.5, 0.5);
+  let dHead = (roadDir + headingBias) - S.heading;
+  while (dHead > Math.PI) dHead -= Math.PI * 2;
+  while (dHead < -Math.PI) dHead += Math.PI * 2;
+  const steer = clamp(dHead * 2.4, -1, 1);
   return [throttle, steer, brake];
 }
 
@@ -1223,6 +1260,8 @@ S.auto = true;
 $('#btn-auto').classList.add('on');
 $('#t-mode').textContent = 'AUTOPILOT';
 S.speed = 16;                                   // already rolling
+// seed the 2D pose from the starting lane, pointing along the road
+placePose(S.z, LANE, roadHeading(S.z));
 running = true;
 requestAnimationFrame(frame);
 
@@ -1264,7 +1303,7 @@ requestAnimationFrame(frame);
     setTimeout(() => document.body.appendChild(box), 600);
   }
   if (q.has('tod')) { world.timeOfDay = clamp(+q.get('tod'), 0, 1); world.timeMode = 'fixed'; }
-  if (q.has('dist')) S.dist = Math.max(0, +q.get('dist') || 0);
+  if (q.has('dist')) placePose(+q.get('dist') || 0, LANE, roadHeading(+q.get('dist') || 0));
 }
 
 // Debug/inspection hook — lets you poke at the sim from the console, and lets
