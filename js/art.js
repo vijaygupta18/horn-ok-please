@@ -524,6 +524,15 @@ export function mudflap(text = 'OK') {
 }
 
 // Road surface: worn asphalt + centre dashes; v-repeat scrolls for motion.
+/**
+ * Road surface — an Indian state-highway one, not a German autobahn.
+ *
+ * What actually makes a road read as Indian: bitumen patches over old repairs in
+ * a slightly different shade, crocodile cracking where the surface has fatigued,
+ * ragged unsealed edges, gravel washed onto the shoulder, and lane markings worn
+ * down to dashes and gaps. Potholes themselves are separate decals (see
+ * `pothole()`), since they need to line up with the bumps you feel.
+ */
 export function roadTexture() {
   const [c, x] = cvs(512, 512);
   x.fillStyle = '#3b3b40'; x.fillRect(0, 0, 512, 512);
@@ -532,7 +541,39 @@ export function roadTexture() {
     x.fillStyle = `rgba(${v},${v},${v + 5},${Math.random() * 0.5})`;
     x.fillRect(Math.random() * 512, Math.random() * 512, rnd(1, 5), rnd(1, 5));
   }
-  // patched tar seams
+
+  // bitumen repair patches — always a shade off from the road around them
+  for (let i = 0; i < 7; i++) {
+    const px = Math.random() * 512, py = Math.random() * 512;
+    const pw = rnd(45, 150), ph = rnd(35, 120);
+    x.fillStyle = `rgba(${20 + Math.random() * 26 | 0},${20 + Math.random() * 24 | 0},24,.75)`;
+    x.beginPath();
+    // irregular blob, not a rectangle
+    x.moveTo(px, py);
+    for (let k = 0; k <= 10; k++) {
+      const a = (k / 10) * Math.PI * 2;
+      x.lineTo(px + Math.cos(a) * pw * 0.5 * rnd(0.7, 1.15),
+               py + Math.sin(a) * ph * 0.5 * rnd(0.7, 1.15));
+    }
+    x.closePath(); x.fill();
+  }
+
+  // crocodile cracking — fatigued surface breaking into plates
+  x.strokeStyle = 'rgba(14,14,16,.62)';
+  for (let i = 0; i < 4; i++) {
+    const cx0 = Math.random() * 512, cy0 = Math.random() * 512;
+    const r = rnd(30, 70);
+    x.lineWidth = rnd(1, 2.4);
+    for (let k = 0; k < 22; k++) {
+      const a = Math.random() * Math.PI * 2, a2 = a + rnd(-1, 1);
+      x.beginPath();
+      x.moveTo(cx0 + Math.cos(a) * r * Math.random(), cy0 + Math.sin(a) * r * Math.random());
+      x.lineTo(cx0 + Math.cos(a2) * r * Math.random(), cy0 + Math.sin(a2) * r * Math.random());
+      x.stroke();
+    }
+  }
+
+  // long tar seams
   x.strokeStyle = 'rgba(20,20,22,.55)'; x.lineWidth = 7;
   for (let i = 0; i < 5; i++) {
     x.beginPath();
@@ -540,12 +581,30 @@ export function roadTexture() {
     x.bezierCurveTo(Math.random() * 512, 170, Math.random() * 512, 340, Math.random() * 512, 512);
     x.stroke();
   }
-  // centre dash + edge lines
-  x.fillStyle = '#e8e4d8';
-  x.fillRect(248, 40, 16, 190);
-  x.fillRect(248, 300, 16, 190);
-  x.fillRect(24, 0, 9, 512);
-  x.fillRect(479, 0, 9, 512);
+
+  // ragged, broken edges with gravel spilling onto the shoulder
+  for (const edge of [26, 482]) {
+    x.fillStyle = 'rgba(120,98,64,.5)';
+    for (let i = 0; i < 130; i++) {
+      const yy = Math.random() * 512;
+      x.fillRect(edge + rnd(-16, 16), yy, rnd(2, 11), rnd(2, 8));
+    }
+  }
+
+  // worn lane markings — faded, chipped, never continuous
+  const paint = (px, py, pw, ph) => {
+    x.fillStyle = `rgba(232,228,216,${rnd(0.45, 0.92)})`;
+    x.fillRect(px, py, pw, ph);
+    // chip bits out of the paint
+    x.fillStyle = 'rgba(59,59,64,.85)';
+    for (let i = 0; i < 5; i++) {
+      x.fillRect(px + rnd(-1, pw), py + Math.random() * ph, rnd(2, pw), rnd(2, 9));
+    }
+  };
+  paint(248, 40, 16, 190);
+  paint(248, 300, 16, 190);
+  paint(24, 0, 9, 512);
+  paint(479, 0, 9, 512);
   return tex(c, 1, 1);
 }
 

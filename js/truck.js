@@ -356,37 +356,302 @@ function buildCabInterior(cabW, cabH, cabL, noseZ, deckY) {
 }
 
 // The driver — moustache, turban or gamcha, checked shirt, arm on the window.
-function buildDriver() {
+/**
+ * The driver — a North Indian truck-wala uncle, built properly.
+ *
+ * The details that actually make him read as one: a heavy moustache with turned-up
+ * ends, a full beard, a paunch that clears the steering wheel, a gamcha slung over
+ * one shoulder, a tilak on the forehead, rudraksh at the wrist, and a pagdi or
+ * topi rather than a bare head. Faces are read from the eyebrows and the beard
+ * line before anything else, so those get the most geometry.
+ */
+function buildDriver(o = {}) {
   const g = new THREE.Group();
-  const skin = mat('#a9713f');
-  const turbanColour = ['#e23b2e', '#f0a020', '#1e6fd9', '#e8e4d8'][(Math.random() * 4) | 0];
+  const pick = (a) => a[(Math.random() * a.length) | 0];
 
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.62, 0.32), mat('#2e6ea8'));
-  torso.position.y = 0.31;
+  const skinTone = pick(['#a9713f', '#96602f', '#b8804a', '#8a5527']);
+  const skin = mat(skinTone, { roughness: 0.82 });
+  const hairCol = pick(['#1a1008', '#241608', '#0e0904', '#3a2a1a']);
+  const greying = Math.random() < 0.4;
+  const beardCol = greying ? '#6b655d' : hairCol;   // moustache colour
+  const hair = mat(hairCol, { roughness: 1 });
+  const beardMat = mat(beardCol, { roughness: 1 });
+
+  const headwear = pick(['pagdi', 'pagdi', 'topi', 'gamcha']);
+  const clothCol = pick(['#e23b2e', '#f0a020', '#1e6fd9', '#e8e4d8', '#1f8a4a']);
+
+  // ── body: shirt, paunch, collar ──────────────────────────────────────────
+  const shirtCol = pick(['#2e6ea8', '#7a8f3a', '#b8532e', '#e8e2d0', '#4a4f8a']);
+  const shirt = mat(shirtCol, { roughness: 0.95 });
+
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.6, 0.34), shirt);
+  torso.position.y = 0.32;
   g.add(torso);
-  // gamcha over the shoulder
-  const gamcha = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.5, 0.35), mat('#e04a3a'));
-  gamcha.position.set(-0.2, 0.36, 0.02);
+
+  // the uncle paunch — sits proud of the shirt front
+  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.24, 14, 12), shirt);
+  belly.position.set(0, 0.22, 0.12);
+  belly.scale.set(1.05, 0.82, 0.72);
+  g.add(belly);
+
+  // open collar + a vest showing at the neck
+  const collar = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.09, 0.3), shirt);
+  collar.position.y = 0.6;
+  g.add(collar);
+  const vest = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.12, 0.26), mat('#e8e4dc'));
+  vest.position.set(0, 0.57, 0.06);
+  g.add(vest);
+
+  // gold chain against the vest
+  const chain = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.009, 6, 16),
+    mat('#d8a828', { metalness: 0.9, roughness: 0.25 }));
+  chain.position.set(0, 0.55, 0.14);
+  chain.rotation.x = 1.35;
+  g.add(chain);
+
+  // gamcha slung over the shoulder
+  const gamcha = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.52, 0.36), mat('#e04a3a', { roughness: 1 }));
+  gamcha.position.set(-0.21, 0.36, 0.02);
+  gamcha.rotation.z = 0.06;
   g.add(gamcha);
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 14), skin);
-  head.position.y = 0.76;
+  // ── head ─────────────────────────────────────────────────────────────────
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.152, 18, 16), skin);
+  head.position.y = 0.78;
+  head.scale.set(1, 1.06, 0.98);
   g.add(head);
-  const turban = new THREE.Mesh(new THREE.SphereGeometry(0.185, 16, 12, 0, 7, 0, Math.PI * 0.62), mat(turbanColour));
-  turban.position.y = 0.79;
-  g.add(turban);
-  const moustache = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.035, 0.03), mat('#20140c'));
-  moustache.position.set(0, 0.72, 0.145);
-  g.add(moustache);
 
-  // right arm resting out of the window
-  const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.34, 4, 8), skin);
+  // jaw, squared off so the beard has something to sit on
+  const jaw = new THREE.Mesh(new THREE.SphereGeometry(0.108, 14, 12), skin);
+  jaw.position.set(0, 0.708, 0.042);
+  jaw.scale.set(1.02, 0.82, 1.0);
+  g.add(jaw);
+
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.036, 0.085, 8), skin);
+  nose.position.set(0, 0.775, 0.15);
+  nose.rotation.x = Math.PI / 2;
+  g.add(nose);
+
+  // ── ears: helix rim, inner bowl, lobe ────────────────────────────────────
+  for (const sx of [-1, 1]) {
+    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.038, 10, 10), skin);
+    ear.position.set(sx * 0.148, 0.782, 0.008);
+    ear.scale.set(0.42, 1.05, 0.8);
+    g.add(ear);
+    const helix = new THREE.Mesh(new THREE.TorusGeometry(0.031, 0.008, 6, 14), skin);
+    helix.position.set(sx * 0.156, 0.786, 0.008);
+    helix.rotation.y = Math.PI / 2;
+    g.add(helix);
+    const bowl = new THREE.Mesh(new THREE.SphereGeometry(0.016, 8, 8), mat('#7a4e26', { roughness: 0.9 }));
+    bowl.position.set(sx * 0.152, 0.78, 0.014);
+    bowl.scale.set(0.5, 1, 0.8);
+    g.add(bowl);
+    const lobe = new THREE.Mesh(new THREE.SphereGeometry(0.017, 8, 8), skin);
+    lobe.position.set(sx * 0.15, 0.742, 0.006);
+    lobe.scale.set(0.5, 1, 0.85);
+    g.add(lobe);
+
+    // ── eyes: white, brown iris, pupil, glint, heavy lid and eye-bag ───────
+    const ex = sx * 0.058, ey = 0.812, ez = 0.128;
+    const white = new THREE.Mesh(new THREE.SphereGeometry(0.026, 12, 10), mat('#e8e4dc', { roughness: 0.35 }));
+    white.position.set(ex, ey, ez);
+    white.scale.set(1, 0.72, 0.62);
+    g.add(white);
+    const iris = new THREE.Mesh(new THREE.SphereGeometry(0.0135, 10, 8), mat('#4a2c14', { roughness: 0.3 }));
+    iris.position.set(ex, ey, ez + 0.016);
+    iris.scale.z = 0.5;
+    g.add(iris);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.0062, 8, 8), mat('#0a0705'));
+    pupil.position.set(ex, ey, ez + 0.021);
+    pupil.scale.z = 0.5;
+    g.add(pupil);
+    const glint = new THREE.Mesh(new THREE.SphereGeometry(0.0026, 6, 6), mat('#ffffff', { roughness: 0.1 }));
+    glint.position.set(ex - sx * 0.005, ey + 0.006, ez + 0.023);
+    g.add(glint);
+    // upper lid — heavy, the way a tired uncle's sits
+    const lid = new THREE.Mesh(new THREE.SphereGeometry(0.028, 12, 8, 0, 7, 0, Math.PI * 0.5), skin);
+    lid.position.set(ex, ey + 0.005, ez - 0.002);
+    lid.scale.set(1, 0.5, 0.66);
+    lid.rotation.x = -0.28;
+    g.add(lid);
+    // bag under the eye
+    const bag = new THREE.Mesh(new THREE.SphereGeometry(0.024, 10, 8), mat('#8f5c2a', { roughness: 0.95 }));
+    bag.position.set(ex, ey - 0.024, ez - 0.004);
+    bag.scale.set(1, 0.34, 0.5);
+    g.add(bag);
+    // thick brow, angled inward
+    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.022, 0.032), hair);
+    brow.position.set(ex, 0.845, 0.132);
+    brow.rotation.z = sx * 0.16;
+    g.add(brow);
+    const browIn = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.019, 0.03), hair);
+    browIn.position.set(sx * 0.026, 0.841, 0.136);
+    browIn.rotation.z = sx * 0.4;
+    g.add(browIn);
+  }
+
+  // ── nose: bridge, tip, nostrils ──────────────────────────────────────────
+  const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.075, 0.05), skin);
+  bridge.position.set(0, 0.8, 0.136);
+  bridge.rotation.x = -0.16;
+  g.add(bridge);
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.026, 10, 10), skin);
+  tip.position.set(0, 0.766, 0.158);
+  tip.scale.set(1.05, 0.85, 1);
+  g.add(tip);
+  for (const sx of [-1, 1]) {
+    const wing = new THREE.Mesh(new THREE.SphereGeometry(0.016, 8, 8), skin);
+    wing.position.set(sx * 0.024, 0.762, 0.146);
+    wing.scale.set(0.8, 0.8, 0.9);
+    g.add(wing);
+    const nostril = new THREE.Mesh(new THREE.SphereGeometry(0.006, 6, 6), mat('#3a2412'));
+    nostril.position.set(sx * 0.015, 0.752, 0.158);
+    g.add(nostril);
+  }
+
+  // ── mouth: lips, and a gutkha-stained lower lip ──────────────────────────
+  // Lips are rounded and sit forward of the beard line. Boxes here read as two
+  // painted bars across the face.
+  const lipU = new THREE.Mesh(new THREE.SphereGeometry(0.026, 10, 8), mat('#6e3324', { roughness: 0.75 }));
+  lipU.position.set(0, 0.7185, 0.152);
+  lipU.scale.set(1.15, 0.3, 0.42);
+  g.add(lipU);
+  const lipL = new THREE.Mesh(new THREE.SphereGeometry(0.026, 10, 8), mat('#7d3c2b', { roughness: 0.75 }));
+  lipL.position.set(0, 0.7045, 0.152);
+  lipL.scale.set(1.05, 0.38, 0.44);
+  g.add(lipL);
+  const mouth = new THREE.Mesh(new THREE.SphereGeometry(0.02, 10, 8), mat('#33110d'));
+  mouth.position.set(0, 0.7115, 0.148);
+  mouth.scale.set(1.1, 0.16, 0.3);
+  g.add(mouth);
+
+  // ── THE moustache ────────────────────────────────────────────────────────
+  // The one feature that makes him read as a truck-wala uncle. Built in three
+  // parts for volume — a thick body under the nose, a pad each side, and waxed
+  // tips turned up at the ends. It must sit PROUD of the lips (z 0.152) and
+  // just below the nose, or it vanishes inside the head.
+  const stacheBody = new THREE.Mesh(new THREE.SphereGeometry(0.052, 14, 12), beardMat);
+  stacheBody.position.set(0, 0.7385, 0.156);
+  stacheBody.scale.set(1.6, 0.5, 0.62);
+  g.add(stacheBody);
+  for (const sx of [-1, 1]) {
+    const pad = new THREE.Mesh(new THREE.SphereGeometry(0.04, 10, 10), beardMat);
+    pad.position.set(sx * 0.058, 0.7355, 0.15);
+    pad.scale.set(1.2, 0.58, 0.66);
+    g.add(pad);
+    const wax = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.004, 0.078, 8), beardMat);
+    wax.position.set(sx * 0.106, 0.7495, 0.142);
+    wax.rotation.z = sx * -1.0;
+    wax.rotation.x = -0.25;
+    g.add(wax);
+  }
+
+  // cheeks, so the face isn't a sphere
+  for (const sx of [-1, 1]) {
+    const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.052, 10, 10), skin);
+    cheek.position.set(sx * 0.088, 0.766, 0.098);
+    cheek.scale.set(0.85, 0.78, 0.6);
+    g.add(cheek);
+  }
+
+  // forehead creases — a lifetime of squinting at the road
+  for (let i = 0; i < 2; i++) {
+    const line = new THREE.Mesh(new THREE.BoxGeometry(0.088, 0.0035, 0.006), mat('#8a5f34', { roughness: 1 }));
+    line.position.set(0, 0.868 + i * 0.02, 0.138);
+    g.add(line);
+  }
+
+  // neck
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.075, 0.1, 12), skin);
+  neck.position.set(0, 0.638, 0.02);
+  g.add(neck);
+
+  // Clean-shaven but for the moustache — the beard read as a mask over the
+  // whole lower face, and the moustache is what carries the character anyway.
+  // A little stubble shadow along the jaw keeps it from looking plastic.
+  const stubble = new THREE.Mesh(
+    new THREE.SphereGeometry(0.15, 18, 16, 0, Math.PI * 2, Math.PI * 0.6, Math.PI * 0.4),
+    mat(greying ? '#7d6a58' : '#6a4e33', { roughness: 1 })
+  );
+  stubble.position.set(0, 0.778, -0.002);
+  stubble.scale.set(1.0, 0.98, 0.88);
+  g.add(stubble);
+
+  // tilak on the forehead
+  const tilak = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.05, 0.012), mat('#c8342a'));
+  tilak.position.set(0, 0.872, 0.128);
+  g.add(tilak);
+
+  // ── headwear ─────────────────────────────────────────────────────────────
+  if (headwear === 'pagdi') {
+    // wrapped turban: stacked bands, each rotated a little
+    for (let i = 0; i < 4; i++) {
+      const band = new THREE.Mesh(
+        new THREE.TorusGeometry(0.128 - i * 0.013, 0.03, 8, 20),
+        mat(clothCol, { roughness: 1 })
+      );
+      band.position.y = 0.872 + i * 0.031;
+      band.rotation.x = Math.PI / 2;
+      band.rotation.z = i * 0.35;
+      g.add(band);
+    }
+    const crown = new THREE.Mesh(new THREE.SphereGeometry(0.088, 14, 10), mat(clothCol, { roughness: 1 }));
+    crown.position.y = 0.972;
+    crown.scale.y = 0.62;
+    g.add(crown);
+    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.16, 0.04), mat(clothCol, { roughness: 1 }));
+    tail.position.set(-0.12, 0.9, -0.09);
+    tail.rotation.z = 0.4;
+    g.add(tail);
+  } else if (headwear === 'topi') {
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.128, 0.14, 0.085, 16), mat(clothCol, { roughness: 1 }));
+    cap.position.y = 0.905;
+    g.add(cap);
+    const top = new THREE.Mesh(new THREE.CircleGeometry(0.128, 16), mat(clothCol, { roughness: 1 }));
+    top.position.y = 0.948;
+    top.rotation.x = -Math.PI / 2;
+    g.add(top);
+  } else {
+    // gamcha tied round the head
+    const wrap = new THREE.Mesh(new THREE.TorusGeometry(0.142, 0.038, 8, 18), mat('#e8e4d8', { roughness: 1 }));
+    wrap.position.y = 0.872;
+    wrap.rotation.x = Math.PI / 2;
+    g.add(wrap);
+    const knot = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, 0.05), mat('#e8e4d8', { roughness: 1 }));
+    knot.position.set(0.1, 0.885, -0.1);
+    g.add(knot);
+    // thinning hair on top
+    const top = new THREE.Mesh(new THREE.SphereGeometry(0.14, 14, 10, 0, 7, 0, Math.PI * 0.45), hair);
+    top.position.y = 0.79;
+    g.add(top);
+  }
+
+  // ── right arm out of the window, with rudraksh and a ring ────────────────
+  const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.058, 0.3, 4, 8), skin);
   arm.position.set(0.3, 0.42, 0.06);
   arm.rotation.z = -0.85;
   g.add(arm);
+  // rolled-up sleeve
+  const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.072, 0.072, 0.11, 10), shirt);
+  sleeve.position.set(0.19, 0.53, 0.05);
+  sleeve.rotation.z = -0.85;
+  g.add(sleeve);
+  const thread = new THREE.Mesh(new THREE.TorusGeometry(0.056, 0.008, 6, 14),
+    mat('#8a2a18', { roughness: 0.9 }));
+  thread.position.set(0.42, 0.29, 0.07);
+  thread.rotation.y = Math.PI / 2;
+  thread.rotation.x = -0.85;
+  g.add(thread);
+
+  // left hand resting on the wheel
+  const armL = new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.26, 4, 8), skin);
+  armL.position.set(-0.24, 0.44, 0.16);
+  armL.rotation.set(-0.55, 0, 0.5);
+  g.add(armL);
 
   g.userData.head = head;
-  g.userData.turban = turban;
+  g.userData.stubble = stubble;
+  g.userData.mouth = mouth;
   return g;
 }
 
@@ -593,6 +858,163 @@ export function buildTruck(o = {}) {
   stack.position.set(-1.22, 2.0, 1.9);
   stack.castShadow = true;
   truck.add(stack);
+  const rainCap = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.12, 12), chromeMat());
+  rainCap.position.set(-1.22, 3.36, 1.9);
+  truck.add(rainCap);
+
+  // ── the kit that makes it unmistakably an Indian lorry ───────────────────
+
+  // Air-horn trumpets on the cab roof. The single most recognisable fitting on
+  // a North Indian truck, and the reason it can play a tune at all.
+  const hornBank = new THREE.Group();
+  for (let i = 0; i < 4; i++) {
+    const len = 0.5 - i * 0.07;
+    const trumpet = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.05, len, 12), chromeMat());
+    body.rotation.z = Math.PI / 2;
+    trumpet.add(body);
+    const bell = new THREE.Mesh(new THREE.ConeGeometry(0.085, 0.16, 14, 1, true), chromeMat());
+    bell.rotation.z = -Math.PI / 2;
+    bell.position.x = len / 2 + 0.07;
+    bell.material.side = THREE.DoubleSide;
+    trumpet.add(bell);
+    trumpet.position.set(-0.28 + i * 0.005, 0.06 + i * 0.001, -0.11 + i * 0.075);
+    hornBank.add(trumpet);
+  }
+  hornBank.position.set(0.1, deckY + cabH + 0.42, noseZ - 0.85);
+  hornBank.rotation.y = Math.PI;                 // bells face forward
+  truck.add(hornBank);
+
+  // Long-arm wing mirrors, held out on brackets so the driver can see past the
+  // body — always oversized on these trucks.
+  for (const sx of [-1, 1]) {
+    const armH = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.42, 6), chromeMat());
+    armH.rotation.z = Math.PI / 2;
+    armH.position.set(sx * (cabW / 2 + 0.21), deckY + cabH - 0.42, noseZ - 0.22);
+    truck.add(armH);
+    const armV = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.5, 6), chromeMat());
+    armV.position.set(sx * (cabW / 2 + 0.4), deckY + cabH - 0.62, noseZ - 0.22);
+    truck.add(armV);
+    const glass = new THREE.Mesh(
+      new THREE.BoxGeometry(0.1, 0.42, 0.24),
+      new THREE.MeshStandardMaterial({ color: '#8a929c', metalness: 0.95, roughness: 0.18 })
+    );
+    glass.position.set(sx * (cabW / 2 + 0.4), deckY + cabH - 0.82, noseZ - 0.22);
+    glass.castShadow = true;
+    truck.add(glass);
+  }
+
+  // Spare tyre slung under the bed, jerry can and toolbox on the chassis rail.
+  const spare = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.3, 18), mat('#1a1a1c', { roughness: 0.95 }));
+  spare.rotation.x = Math.PI / 2;
+  spare.position.set(0, 0.75, -1.35 + bodyL / 2 - 1.1);
+  truck.add(spare);
+
+  const diesel = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 1.5, 14), chromeMat());
+  diesel.rotation.z = Math.PI / 2;
+  diesel.rotation.y = Math.PI / 2;
+  diesel.position.set(1.15, 0.85, 1.0);
+  truck.add(diesel);
+
+  const toolbox = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.34, 0.7), mat('#3a4048', { metalness: 0.4 }));
+  toolbox.position.set(-1.15, 0.9, 0.6);
+  truck.add(toolbox);
+
+  const jerry = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.42, 0.32), mat('#4a6a2a'));
+  jerry.position.set(-1.2, 1.12, -0.4);
+  truck.add(jerry);
+
+  // The chappal hung off the bumper to take the evil eye — as real as the
+  // nimbu-mirchi, and every bit as common.
+  const chappal = new THREE.Group();
+  const strapT = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.3, 5), mat('#e8dcc0'));
+  strapT.position.y = -0.15;
+  chappal.add(strapT);
+  const sole = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.26, 0.045), mat('#5b3a22', { roughness: 1 }));
+  sole.position.y = -0.42;
+  chappal.add(sole);
+  const strap = new THREE.Mesh(new THREE.TorusGeometry(0.035, 0.008, 5, 10, Math.PI), mat('#2a1a10'));
+  strap.position.set(0, -0.35, 0.03);
+  chappal.add(strap);
+  chappal.position.set(-0.85, 0.84, noseZ + 0.18);
+  truck.add(chappal);
+
+  // Retroreflective tape — red/white on the rear, mandated on Indian lorries
+  // and instantly recognisable in headlights.
+  const tapeMat = (c) => new THREE.MeshStandardMaterial({
+    color: c, roughness: 0.35, metalness: 0.1, emissive: c, emissiveIntensity: 0.08,
+  });
+  for (let i = 0; i < 10; i++) {
+    const seg = new THREE.Mesh(new THREE.BoxGeometry(bodyW / 10, 0.09, 0.03),
+      tapeMat(i % 2 ? '#e8e4dc' : '#c81c14'));
+    seg.position.set(-bodyW / 2 + bodyW / 20 + i * (bodyW / 10), deckY + 0.12, -1.35 - bodyL / 2 - 0.02);
+    truck.add(seg);
+  }
+  // amber tape down each flank
+  for (const sx of [-1, 1]) {
+    for (let i = 0; i < 8; i++) {
+      const seg = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.07, bodyL / 9),
+        tapeMat(i % 2 ? '#e8a020' : '#e8e4dc'));
+      seg.position.set(sx * (bodyW / 2 + 0.03), deckY + 0.1,
+        -1.35 - bodyL / 2 + bodyL / 18 + i * (bodyL / 8.5));
+      truck.add(seg);
+    }
+  }
+
+  // Mudguards over the rear bogie
+  for (const sx of [-1, 1]) {
+    for (const gz of [-2.1, -3.25]) {
+      const guard = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.78, 0.78, 0.92, 14, 1, true, 0, Math.PI),
+        mat('#22262b', { roughness: 0.85, side: THREE.DoubleSide })
+      );
+      guard.rotation.z = Math.PI / 2;
+      guard.position.set(sx * 1.2, 0.62, gz);
+      truck.add(guard);
+    }
+  }
+
+  // Front indicator lamps and a plate on the bumper
+  for (const sx of [-1.16, 1.16]) {
+    const ind = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.07),
+      new THREE.MeshStandardMaterial({ color: '#c87a10', emissive: '#e8901a', emissiveIntensity: 0.12 }));
+    ind.position.set(sx, 1.12, noseZ + 0.02);
+    truck.add(ind);
+  }
+  const frontPlate = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.2, 0.03), mat('#f0ece0'));
+  frontPlate.position.set(0, 0.86, noseZ + 0.2);
+  truck.add(frontPlate);
+
+  // Rope hooks along the body rail — how the tarp actually gets lashed down
+  for (const sx of [-1, 1]) {
+    for (let i = 0; i < 7; i++) {
+      const hook = new THREE.Mesh(new THREE.TorusGeometry(0.035, 0.009, 5, 10), chromeMat());
+      hook.position.set(sx * (bodyW / 2 + 0.02), deckY + 0.3,
+        -1.35 - bodyL / 2 + 0.4 + i * ((bodyL - 0.8) / 6));
+      hook.rotation.y = Math.PI / 2;
+      truck.add(hook);
+    }
+  }
+
+  // Cab step below the door
+  for (const sx of [-1, 1]) {
+    const step = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.05, 0.5), chromeMat());
+    step.position.set(sx * (cabW / 2 + 0.04), 0.72, noseZ - cabL * 0.55);
+    truck.add(step);
+  }
+
+  // rear ladder up to the load bed
+  for (const sx of [-0.25, 0.25]) {
+    const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 1.3, 6), chromeMat());
+    rail.position.set(sx, 1.35, -1.35 - bodyL / 2 - 0.12);
+    truck.add(rail);
+  }
+  for (let i = 0; i < 4; i++) {
+    const rung = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.5, 6), chromeMat());
+    rung.rotation.z = Math.PI / 2;
+    rung.position.set(0, 0.85 + i * 0.32, -1.35 - bodyL / 2 - 0.12);
+    truck.add(rung);
+  }
 
   // ── wheels: single front axle, twin rear axles (dual tyres) ───────────────
   const wheels = [];

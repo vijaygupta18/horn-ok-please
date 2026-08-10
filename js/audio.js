@@ -551,6 +551,63 @@ export class Sfx {
     o.stop(t0 + 0.3);
   }
 
+  /** The thud of a loaded lorry dropping into a pothole. */
+  thud(force = 1) {
+    if (!this.enabled) return;
+    const ctx = this._ensure();
+    const t0 = ctx.currentTime;
+    // low body boom
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(110, t0);
+    o.frequency.exponentialRampToValueAtTime(38, t0 + 0.18);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.4 * force + 0.05, t0 + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.34);
+    o.connect(g).connect(this.master);
+    o.start(t0); o.stop(t0 + 0.36);
+    // suspension/chassis rattle on top
+    const len = Math.floor(ctx.sampleRate * 0.22);
+    const b = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = b.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+    const src = ctx.createBufferSource();
+    src.buffer = b;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 950; bp.Q.value = 1.1;
+    const ng = ctx.createGain();
+    ng.gain.value = 0.16 * force;
+    src.connect(bp).connect(ng).connect(this.master);
+    src.start(t0);
+  }
+
+  /** The short hiss of a gutkha spit out of the window. */
+  spit() {
+    if (!this.enabled) return;
+    const ctx = this._ensure();
+    const t0 = ctx.currentTime;
+    const len = Math.floor(ctx.sampleRate * 0.3);
+    const b = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = b.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      const k = i / len;
+      // sharp attack, quick decay — a wet "ptooey", not a long hiss
+      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - k, 2.6) * (k < 0.05 ? k / 0.05 : 1);
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = b;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(2600, t0);
+    bp.frequency.exponentialRampToValueAtTime(900, t0 + 0.25);
+    bp.Q.value = 1.4;
+    const g = ctx.createGain();
+    g.gain.value = 0.22;
+    src.connect(bp).connect(g).connect(this.master);
+    src.start(t0);
+  }
+
   /** Air-brake release — the loud pneumatic hiss every Indian truck makes. */
   airBrake() {
     if (!this.enabled) return;

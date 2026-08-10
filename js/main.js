@@ -152,6 +152,93 @@ function emitSmoke(pos, puff) {
   s.scale.setScalar(0.5);
 }
 
+// ── gutkha ─────────────────────────────────────────────────────────────────
+// The uncle chews paan masala, and every so often leans out and spits. The
+// habit compounds: the first one is a couple of minutes in, and the gap shrinks
+// geometrically after that — which is how the habit actually works.
+
+const GUTKHA = {
+  next: 60,           // first spit one minute in
+  n: 1,               // which spit we're waiting for
+  t: 0,
+  count: 0,
+  anim: 0,            // >0 while he's leaning out mid-spit
+};
+const GUTKHA_STEP = 60;      // gaps grow 60s, 120s, 180s, 240s, …
+
+const spitTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 32;
+  const x = c.getContext('2d');
+  const g = x.createRadialGradient(16, 16, 0, 16, 16, 16);
+  g.addColorStop(0, 'rgba(150,32,20,.95)');
+  g.addColorStop(0.6, 'rgba(120,26,16,.6)');
+  g.addColorStop(1, 'rgba(110,24,14,0)');
+  x.fillStyle = g; x.fillRect(0, 0, 32, 32);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
+
+const spit = [];
+for (let i = 0; i < 26; i++) {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: spitTex, transparent: true, opacity: 0, depthWrite: false,
+  }));
+  s.userData.life = 0;
+  scene.add(s);
+  spit.push(s);
+}
+let spitCursor = 0;
+const spitOrigin = new THREE.Vector3();
+
+function doSpit() {
+  GUTKHA.count++;
+  GUTKHA.anim = 1.1;
+  // the stream leaves the window, so start it outside the cab on the driver's side
+  truck.localToWorld(spitOrigin.set(1.35, 2.42, 3.1));
+  for (let i = 0; i < 9; i++) {
+    const s = spit[spitCursor++ % spit.length];
+    s.position.copy(spitOrigin);
+    s.userData.life = 1;
+    s.userData.vx = 1.6 + Math.random() * 1.4;          // outward, away from the cab
+    s.userData.vy = 0.2 + Math.random() * 0.5;
+    s.userData.vz = (Math.random() - 0.5) * 0.8;
+    s.scale.setScalar(0.05 + Math.random() * 0.05);
+  }
+  sfx.spit();
+  // Each wait is one minute longer than the last: 60s, then 2 min, then 3 …
+  GUTKHA.n++;
+  GUTKHA.next = GUTKHA_STEP * GUTKHA.n;
+  GUTKHA.t = 0;
+  if (GUTKHA.count === 1) toast('पान मसाला', 'Driver spits gutkha', true);
+}
+
+function updateGutkha(dt) {
+  GUTKHA.t += dt;
+  if (GUTKHA.t >= GUTKHA.next) doSpit();
+
+  // he turns his head to the window and back
+  const d = truck.userData.driver;
+  if (d) {
+    const lean = GUTKHA.anim > 0 ? Math.sin((1.1 - GUTKHA.anim) / 1.1 * Math.PI) : 0;
+    d.rotation.y = Math.PI + lean * 0.85;
+    d.position.x = 0.62 + lean * 0.1;
+    if (d.userData.head) d.userData.head.rotation.z = -lean * 0.3;
+  }
+  GUTKHA.anim = Math.max(0, GUTKHA.anim - dt);
+
+  for (const s of spit) {
+    if (s.userData.life <= 0) { s.material.opacity = 0; continue; }
+    s.userData.life -= dt * 1.5;
+    s.position.x += s.userData.vx * dt;
+    s.position.y += s.userData.vy * dt;
+    s.position.z += s.userData.vz * dt;
+    s.userData.vy -= 6.5 * dt;                    // gravity pulls the arc down
+    s.material.opacity = Math.max(0, s.userData.life * 0.85);
+  }
+}
+
 // ── cow (the road hazard everyone in India knows) ──────────────────────────
 
 const cow = makeCow();
@@ -189,6 +276,7 @@ const S = {
   started: false,
   hornCooldown: 0,
   offroad: 0,
+  suspY: 0,         // smoothed suspension travel
 };
 const MAX_SPEED = 29;      // ~104 km/h
 const REVERSE_MAX = 6;     // ~21 km/h — nobody reverses a loaded lorry faster
@@ -926,8 +1014,14 @@ function frame(now) {
   // The render frame is world-axis-aligned but centred on the road at our z, so
   // our local x IS the lane offset and local z is 0 (we're the z reference).
   truck.position.set(S.lane, 0, 0);
-  const bump = Math.sin(S.odo * 1.7) * 0.02 + Math.sin(S.odo * 5.3) * 0.012;
-  truck.position.y = bump * Math.min(1, Math.abs(S.speed) / 10) + S.offroad * Math.sin(S.odo * 9) * 0.06;
+  // Surface roughness — broad undulation plus fine chatter, so the ride never
+  // feels like glass. (Potholes were tried and dropped: they read as noise.)
+  const roughness = Math.sin(S.odo * 1.7) * 0.026 + Math.sin(S.odo * 5.3) * 0.016
+                  + Math.sin(S.odo * 11.9 + 1.3) * 0.008;
+  const targetY = roughness * Math.min(1, Math.abs(S.speed) / 8)
+                + S.offroad * Math.sin(S.odo * 9) * 0.07;
+  S.suspY += (targetY - S.suspY) * Math.min(1, dt * 16);
+  truck.position.y = S.suspY;
   truck.rotation.y = S.heading;
   truck.rotation.z = -S.steer * 0.035 * grip;                    // body roll into the turn
   truck.rotation.x = (S.braking ? 0.014 : 0) - S.throttle * 0.008;
@@ -1002,6 +1096,9 @@ function frame(now) {
     hintText = `🛑 ब्रेक टाइम — dhaba ${Math.round(dh)}m, dheere`;
   }
   if (hintText !== lastDhaba) { UI.dhaba.textContent = hintText; lastDhaba = hintText; }
+
+  // ---- the gutkha habit -------------------------------------------------
+  updateGutkha(dt);
 
   // ---- dhaba break -----------------------------------------------------
   updateBreak(dt);
@@ -1279,6 +1376,13 @@ requestAnimationFrame(frame);
     S.started = true;
   }
   if (q.has('cam')) S.cam = clamp(+q.get('cam') | 0, 0, CAMS.length - 1);
+  // ?face — park the camera on the driver, for checking his detailing
+  if (q.has('face')) {
+    // The driver's head sits at (0.62, 2.45, 3.15) in truck space, facing -Z.
+    CAMS.push({ name: 'FACE', pos: new THREE.Vector3(0.66, 2.46, 2.15),
+                look: new THREE.Vector3(0.62, 2.45, 3.15), fov: 30, inside: true });
+    S.cam = CAMS.length - 1;
+  }
   // ?layout — dump on-screen control boxes, for checking the mobile layout
   if (q.has('layout')) {
     const box = document.createElement('pre');
@@ -1309,7 +1413,7 @@ requestAnimationFrame(frame);
 // Debug/inspection hook — lets you poke at the sim from the console, and lets
 // automated checks step it without waiting on requestAnimationFrame.
 window.__sim = {
-  S, BREAK, QUALITY, CAMS, orbit, world, truck, radio, sfx, presence,
+  S, BREAK, QUALITY, CAMS, orbit, world, truck, radio, sfx, presence, GUTKHA, doSpit,
   driver, multiplayer, billboards,
   renderer, mirrorRT, mirrorCam, get mirrorFrames(){ return mirrorFrames; },
   step(n = 1, dt = 1 / 60) {
