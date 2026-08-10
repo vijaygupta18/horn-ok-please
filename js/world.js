@@ -16,6 +16,23 @@ const VIEW = 430;              // metres of road built ahead
 const BEHIND = 45;
 const SEGS = 190;
 
+// ── the "small round universe" ──────────────────────────────────────────────
+// The highway is procedurally endless, but for multiplayer + the upload
+// billboards we treat it as a ring: distance wraps every UNIVERSE_LEN metres, so
+// everyone eventually meets and the gallery of billboards repeats. A special
+// billboard stands every BILLBOARD_SPACING metres; its slot id (0…COUNT-1) is
+// the shared key every client agrees on, so an upload lands on the same board
+// for everybody.
+export const BILLBOARD_SPACING = 600;
+export const BILLBOARD_COUNT = 12;
+export const UNIVERSE_LEN = BILLBOARD_SPACING * BILLBOARD_COUNT;   // 7.2 km loop
+
+/** Stable, shared slot id for a special billboard standing at distance `d`. */
+export function billboardSlot(d) {
+  const k = Math.round(d / BILLBOARD_SPACING);
+  return ((k % BILLBOARD_COUNT) + BILLBOARD_COUNT) % BILLBOARD_COUNT;
+}
+
 // Signposted highway distance is compressed against real driving distance —
 // otherwise Amritsar (440 km up NH-44) would never arrive in a play session.
 export const HWY_SCALE = 20;   // signposted km per game km
@@ -305,6 +322,42 @@ function makeHoarding(pool) {
   board.position.y = 5.2;
   board.castShadow = true;
   g.add(board);
+  return g;
+}
+
+// ── special "upload" billboard ──────────────────────────────────────────────
+// A big blank hoarding on two posts whose face is a swappable image. The face
+// mesh is tagged so js/billboards.js can paint it with either a placeholder or
+// whatever a player has uploaded to this board's shared slot. The glowing pad on
+// the road below it is drawn separately (js/billboards.js), in world space.
+function makeBillboard() {
+  const g = new THREE.Group();
+  for (const sx of [-3.3, 3.3]) {
+    const p = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.2, 7.4, 8),
+      mat('#4b5158', { metalness: 0.45, roughness: 0.55 }));
+    p.position.set(sx, 3.7, 0); p.castShadow = true;
+    g.add(p);
+  }
+  // dark frame behind the image
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(9.0, 4.7, 0.28), mat('#23272e'));
+  frame.position.y = 7.7; frame.castShadow = true;
+  g.add(frame);
+  // the swappable face — billboards.js owns its material.map
+  const faceMat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.82 });
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(8.5, 4.2), faceMat);
+  face.position.set(0, 7.7, 0.16);
+  face.userData.billboardFace = true;
+  g.add(face);
+  // striplights along the top that warm up at dusk
+  const lampGeo = new THREE.SphereGeometry(0.1, 7, 6);
+  for (let i = 0; i < 6; i++) {
+    const lamp = new THREE.Mesh(lampGeo,
+      new THREE.MeshStandardMaterial({ color: '#fff0c0', emissive: '#ffdf90', emissiveIntensity: 0.2 }));
+    lamp.position.set(-3.6 + i * 1.44, 10.15, 0.3);
+    lamp.userData.bulb = true;
+    g.add(lamp);
+  }
+  g.userData.isBillboard = true;
   return g;
 }
 
@@ -646,7 +699,7 @@ function makeShrine() {
 // on +Z, but the driver travels toward +Z — so left at rotation 0 they present
 // their back and every word comes out mirrored. These must be turned to face
 // oncoming traffic no matter which side of the road they stand on.
-const LETTERED = new Set(['hoarding', 'sign', 'safety', 'milestone', 'dhaba']);
+const LETTERED = new Set(['hoarding', 'sign', 'safety', 'milestone', 'dhaba', 'billboard']);
 
 /**
  * Run expensive canvas work off the render frame.
@@ -1108,7 +1161,11 @@ export class World {
 
   _spawnProp(kind, d, side) {
     let obj, off, centered = false;
+    // Snap upload billboards onto the shared grid so every client agrees which
+    // slot a board belongs to.
+    if (kind === 'billboard') d = Math.round(d / BILLBOARD_SPACING) * BILLBOARD_SPACING;
     switch (kind) {
+      case 'billboard': obj = makeBillboard();  off = rnd(8, 11); break;
       case 'tree':      obj = makeTree();       off = rnd(9, 34); break;
       case 'pole':      obj = makePole();       off = 8.6; break;
       case 'milestone': obj = makeMilestone(Math.round(HWY_START + d / 1000 * HWY_SCALE)); off = 6.8; break;
@@ -1151,6 +1208,11 @@ export class World {
     for (let d = 250; d < VIEW; d += 400) this._spawnProp('temple', d, flip());
     for (let d = 80; d < VIEW; d += 190) this._spawnProp('shrine', d, flip());
     for (let d = 180; d < VIEW; d += 260) this._spawnProp('tractor', d, flip());
+    // A couple of upload billboards in rotation — they recycle forward and snap
+    // onto the shared slot grid (distinct multiples of BILLBOARD_SPACING), so you
+    // meet one every few hundred metres and each maps to its own shared slot.
+    this._spawnProp('billboard', BILLBOARD_SPACING, 1);
+    this._spawnProp('billboard', BILLBOARD_SPACING * 2, -1);
     // village clusters
     for (let d = 200; d < VIEW; d += 340) {
       const s = flip();
@@ -1193,6 +1255,8 @@ export class World {
     // Jump forward in whole view-lengths so a long stall can't leave it behind.
     const span = VIEW + BEHIND;
     while (rec.d - this.dist < -BEHIND) rec.d += span;
+    // Keep billboards locked to the shared slot grid as they roll forward.
+    if (rec.kind === 'billboard') rec.d = Math.round(rec.d / BILLBOARD_SPACING) * BILLBOARD_SPACING;
     if (!rec.centered) rec.side = Math.random() < 0.5 ? -1 : 1;
 
     const mustRebuild = kind !== rec.kind || World.REBUILD.has(kind);
@@ -1333,7 +1397,7 @@ export class World {
       p.obj.rotation.y = p.rot + h;
       p.obj.visible = z > -BEHIND && z < VIEW;
       // dhaba string lights + temple flag come alive at dusk
-      if (p.kind === 'dhaba') {
+      if (p.kind === 'dhaba' || p.kind === 'billboard') {
         for (const c of p.obj.children) {
           if (c.userData.bulb) c.material.emissiveIntensity = 0.08 + this.night * 0.45;
         }
